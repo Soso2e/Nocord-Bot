@@ -15,5 +15,12 @@
     "chunk_overlap": 50,
     "retrieval_k": 4,
     "score_threshold": 0.3
+  },
+  "notion": {
+    "enabled": false,
+    "api_key": "",
+    "database_ids": [],
+    "pdf_property": "PDF",
+    "max_results": 5
   }
 }

@@ -67,6 +67,44 @@ def build_messages(db_name: str, session_id: str, user_input: str) -> list[dict]
     return messages
 
 
+def build_messages_with_synthesized_info(
+    db_name: str,
+    session_id: str,
+    user_input: str,
+    synthesized_info: str,
+) -> list[dict]:
+    """Like build_messages but uses pre-synthesized external context instead of raw RAG docs.
+
+    Called by the 2-stage Notion LLM flow: LLM① produces synthesized_info,
+    which replaces the raw knowledge-base injection in the final LLM② prompt.
+    """
+    cfg = _load_db_config(db_name)
+    system_prompt = cfg.get("system_prompt", "You are a helpful assistant.")
+    max_ctx = cfg.get("memory_policy", {}).get("max_context_messages", 20)
+
+    history = get_history(db_name, session_id, limit=max_ctx)
+    memories = find_relevant_memories(db_name, user_input, limit=5)
+
+    messages = [{"role": "system", "content": system_prompt}]
+
+    if synthesized_info:
+        messages.append({
+            "role": "system",
+            "content": "統制済み情報（RAG・Notion検索結果を統合）:\n" + synthesized_info,
+        })
+
+    if memories:
+        memory_lines = "\n".join(f"- {m['content']}" for m in memories)
+        messages.append({
+            "role": "system",
+            "content": "長期記憶（会話から学んだ情報）:\n" + memory_lines,
+        })
+
+    messages.extend(history)
+    messages.append({"role": "user", "content": user_input})
+    return messages
+
+
 def list_available_dbs() -> list[str]:
     if not DB_BASE.exists():
         return []
