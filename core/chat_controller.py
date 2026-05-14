@@ -162,14 +162,152 @@ def _prepare_history_for_memory_extraction(history_lines: list[str]) -> str:
     return "\n".join(result)
 
 
+_SYNTHESIS_SYSTEM_PROMPT = (
+    "あなたは情報統制アシスタントです。複数の情報源（RAG知識ベース・Notion）から得られた情報を"
+    "統合・要約し、ユーザーの質問に答えるための簡潔な情報サマリーを日本語で生成してください。\n\n"
+    "ルール:\n"
+    "- 重複情報は1つにまとめる\n"
+    "- 矛盾する情報がある場合は両方を記載し「※情報源間で矛盾あり」と注記する\n"
+    "- 質問に無関係な情報は省略する\n"
+    "- 情報がない場合は「関連情報なし」のみ返す\n"
+    "- 推測や補完は行わず、提供された情報のみを使う"
+)
+
+
+def _build_synthesis_messages(
+    user_input: str,
+    rag_docs: list[dict],
+    notion_results: list[dict],
+) -> list[dict]:
+    sections: list[str] = [f"質問: {user_input}"]
+
+    if rag_docs:
+        rag_lines = "\n---\n".join(
+            f"[出典: {d['source']}]\n{d['content']}" for d in rag_docs
+        )
+        sections.append("【RAG知識ベース検索結果】\n" + rag_lines)
+
+    if notion_results:
+        notion_lines = "\n---\n".join(
+            f"[Notionページ: {r['title']}]\n{r['text']}" for r in notion_results
+        )
+        sections.append("【Notion検索結果】\n" + notion_lines)
+
+    return [
+        {"role": "system", "content": _SYNTHESIS_SYSTEM_PROMPT},
+        {"role": "user", "content": "\n\n".join(sections)},
+    ]
+
+
+async def _process_with_notion(
+    message: str,
+    session_id: str,
+    db_name: str,
+    cfg: dict,
+    notion_cfg: dict,
+) -> str:
+    """2-stage LLM flow: LLM① synthesizes RAG+Notion info, LLM② generates the reply."""
+    from core import notion_client, notion_rag_sync
+    from core.context_builder import build_messages_with_synthesized_info
+    from core.rag_manager import delete_by_source, ingest_text
+    from core.rag_manager import search as rag_search
+
+    api_key = notion_client.get_api_key(notion_cfg)
+    if not api_key:
+        raise ValueError("Notion API key not configured (set notion.api_key in DB config or NOTION_API_KEY env var)")
+
+    database_ids: list[str] = notion_cfg.get("database_ids", [])
+    pdf_property: str = notion_cfg.get("pdf_property", "PDF")
+    max_results: int = notion_cfg.get("max_results", 5)
+
+    # Search Notion
+    notion_pages: list[dict] = []
+    try:
+        notion_pages = await notion_client.search_pages(
+            message, database_ids, api_key, max_results
+        )
+    except Exception as exc:
+        print(f"[Notion] Search failed: {exc}")
+
+    # Sync PDFs to RAG for new/updated pages
+    for page in notion_pages:
+        page_id = page.get("id", "")
+        last_edited = page.get("last_edited_time", "")
+        pdf_urls = notion_client.get_pdf_urls(page, pdf_property)
+
+        if pdf_urls and notion_rag_sync.needs_sync(db_name, page_id, last_edited):
+            rag_source = notion_rag_sync.get_rag_source(page_id)
+            delete_by_source(db_name, rag_source)
+            for url in pdf_urls:
+                try:
+                    pdf_text = await notion_client.download_pdf_text(url)
+                    if pdf_text:
+                        ingest_text(db_name, pdf_text, source=rag_source)
+                except Exception as exc:
+                    print(f"[Notion] PDF sync failed for page {page_id}: {exc}")
+            notion_rag_sync.mark_synced(db_name, page_id, last_edited)
+
+    # RAG search after sync so newly indexed PDFs are included
+    rag_docs: list[dict] = []
+    rag_cfg = cfg.get("rag", {})
+    if rag_cfg.get("enabled", False):
+        try:
+            rag_docs = rag_search(
+                db_name,
+                message,
+                k=rag_cfg.get("retrieval_k", 4),
+                score_threshold=rag_cfg.get("score_threshold", 0.3),
+            )
+        except Exception:
+            pass
+
+    # Fetch Notion page texts
+    notion_results: list[dict] = []
+    for page in notion_pages:
+        try:
+            title = notion_client.get_page_title(page)
+            text = await notion_client.get_page_text(page["id"], api_key)
+            if title or text:
+                notion_results.append({"title": title, "text": text})
+        except Exception as exc:
+            print(f"[Notion] Page text fetch failed for {page.get('id', '')}: {exc}")
+
+    # No external info found — fall back to the normal single-stage flow
+    if not rag_docs and not notion_results:
+        messages = build_messages(db_name, session_id, message)
+        return await _llm.chat(messages)
+
+    # LLM① — synthesize RAG + Notion into a compact information summary
+    synthesis_msgs = _build_synthesis_messages(message, rag_docs, notion_results)
+    synthesized = await _llm.chat(synthesis_msgs)
+
+    # LLM② — generate the final user-facing reply
+    final_messages = build_messages_with_synthesized_info(
+        db_name, session_id, message, synthesized
+    )
+    return await _llm.chat(final_messages)
+
+
 async def process(
     message: str,
     session_id: str,
     db_name: str = "general",
 ) -> str:
     init_db(db_name)
-    messages = build_messages(db_name, session_id, message)
-    reply = await _llm.chat(messages)
+    cfg = _load_db_config(db_name)
+    notion_cfg = cfg.get("notion", {})
+
+    if notion_cfg.get("enabled", False):
+        try:
+            reply = await _process_with_notion(message, session_id, db_name, cfg, notion_cfg)
+        except Exception as exc:
+            print(f"[Notion] Integration error, falling back to standard flow: {exc}")
+            messages = build_messages(db_name, session_id, message)
+            reply = await _llm.chat(messages)
+    else:
+        messages = build_messages(db_name, session_id, message)
+        reply = await _llm.chat(messages)
+
     save_message(db_name, session_id, "user", message)
     save_message(db_name, session_id, "assistant", reply)
     return reply
