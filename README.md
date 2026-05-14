@@ -1,4 +1,4 @@
-# PAI-chatbot
+# Nocord - Bot
 
 Discord / Slack / HTTP API に対応したマルチインターフェース AI チャットボット。  
 LM Studio の OpenAI 互換 API をバックエンドに、RAG（検索拡張生成）ベースの専属 Q&A エージェントとして利用できます。
