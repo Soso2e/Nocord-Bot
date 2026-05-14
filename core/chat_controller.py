@@ -267,8 +267,9 @@ async def _process_with_notion(
         try:
             title = notion_client.get_page_title(page)
             text = await notion_client.get_page_text(page["id"], api_key)
+            page_url = page.get("url", "")
             if title or text:
-                notion_results.append({"title": title, "text": text})
+                notion_results.append({"title": title, "text": text, "url": page_url})
         except Exception as exc:
             print(f"[Notion] Page text fetch failed for {page.get('id', '')}: {exc}")
 
@@ -285,7 +286,18 @@ async def _process_with_notion(
     final_messages = build_messages_with_synthesized_info(
         db_name, session_id, message, synthesized
     )
-    return await _llm.chat(final_messages)
+    reply = await _llm.chat(final_messages)
+
+    # Append Notion source links if available
+    source_links = [
+        f"- [{r['title'] or 'Notionページ'}]({r['url']})"
+        for r in notion_results
+        if r.get("url")
+    ]
+    if source_links:
+        reply = reply + "\n\n**参考:**\n" + "\n".join(source_links)
+
+    return reply
 
 
 async def process(
