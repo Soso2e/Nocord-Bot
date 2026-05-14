@@ -188,6 +188,7 @@ async def _sync_slash_commands() -> None:
 db_group = app_commands.Group(name="db", description="このDiscordサーバーのメモリDBを管理する")
 memory_group = app_commands.Group(name="memory", description="このDiscordサーバーの長期記憶を管理する")
 rag_group = app_commands.Group(name="rag", description="現在のDBのRAG（知識検索）を管理する")
+notion_group = app_commands.Group(name="notion", description="現在のDBのNotion連携を管理する")
 
 
 @bot.event
@@ -908,9 +909,138 @@ async def rag_clear(interaction: discord.Interaction):
     )
 
 
+@notion_group.command(name="status", description="現在のDBのNotion連携状態を表示する")
+async def notion_status(interaction: discord.Interaction):
+    if not _require_guild(interaction):
+        await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
+        return
+
+    db_name = _db(interaction.guild.id)
+    stats = chat_controller.notion_get_status(db_name)
+    enabled_label = "有効" if stats["enabled"] else "無効"
+    color = 0x57F287 if stats["enabled"] else 0x99AAB5
+    embed = discord.Embed(title=f"Notion ステータス — `{db_name}`", color=color)
+    embed.add_field(name="状態", value=enabled_label, inline=True)
+    embed.add_field(name="登録DB数", value=str(stats["database_count"]), inline=True)
+    embed.add_field(name="APIキー", value="設定済み" if stats["has_api_key"] else "未設定（環境変数 NOTION_API_KEY を使用）", inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@notion_group.command(name="on", description="現在のDBのNotion連携を有効にする")
+@app_commands.describe(api_key="Notion インテグレーションのAPIキー（省略時は環境変数 NOTION_API_KEY を使用）")
+async def notion_on(interaction: discord.Interaction, api_key: str = ""):
+    if not _require_guild(interaction):
+        await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
+        return
+    if not _has_manage_guild(interaction):
+        await _send_permission_error(interaction)
+        return
+
+    db_name = _db(interaction.guild.id)
+    chat_controller.notion_enable(db_name, api_key or None)
+    await interaction.response.send_message(
+        f"DB `{db_name}` の Notion 連携を有効にしました。",
+        ephemeral=True,
+    )
+
+
+@notion_group.command(name="off", description="現在のDBのNotion連携を無効にする")
+async def notion_off(interaction: discord.Interaction):
+    if not _require_guild(interaction):
+        await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
+        return
+    if not _has_manage_guild(interaction):
+        await _send_permission_error(interaction)
+        return
+
+    db_name = _db(interaction.guild.id)
+    chat_controller.notion_disable(db_name)
+    await interaction.response.send_message(
+        f"DB `{db_name}` の Notion 連携を無効にしました。",
+        ephemeral=True,
+    )
+
+
+@notion_group.command(name="add", description="現在のDBにNotionデータベースを追加する")
+@app_commands.describe(
+    database_id="NotionデータベースのID（NotionページURLの32文字英数字）",
+    label="このデータベースの表示名（省略可）",
+)
+async def notion_add(interaction: discord.Interaction, database_id: str, label: str = ""):
+    if not _require_guild(interaction):
+        await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
+        return
+    if not _has_manage_guild(interaction):
+        await _send_permission_error(interaction)
+        return
+
+    db_name = _db(interaction.guild.id)
+    try:
+        chat_controller.notion_add_database(db_name, database_id.strip(), label.strip())
+    except ValueError as exc:
+        await interaction.response.send_message(str(exc), ephemeral=True)
+        return
+
+    display = f" (`{label}`)" if label else ""
+    await interaction.response.send_message(
+        f"DB `{db_name}` に Notion データベース `{database_id}`{display} を追加しました。",
+        ephemeral=True,
+    )
+
+
+@notion_group.command(name="remove", description="現在のDBからNotionデータベースを削除する")
+@app_commands.describe(database_id="削除するNotionデータベースID（/notion list で確認できます）")
+async def notion_remove(interaction: discord.Interaction, database_id: str):
+    if not _require_guild(interaction):
+        await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
+        return
+    if not _has_manage_guild(interaction):
+        await _send_permission_error(interaction)
+        return
+
+    db_name = _db(interaction.guild.id)
+    removed = chat_controller.notion_remove_database(db_name, database_id.strip())
+    if removed:
+        await interaction.response.send_message(
+            f"DB `{db_name}` から Notion データベース `{database_id}` を削除しました。",
+            ephemeral=True,
+        )
+    else:
+        await interaction.response.send_message(
+            f"データベース `{database_id}` は登録されていません。",
+            ephemeral=True,
+        )
+
+
+@notion_group.command(name="list", description="現在のDBに登録されているNotionデータベース一覧を表示する")
+async def notion_list(interaction: discord.Interaction):
+    if not _require_guild(interaction):
+        await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
+        return
+
+    db_name = _db(interaction.guild.id)
+    databases = chat_controller.notion_list_databases(db_name)
+    if not databases:
+        await interaction.response.send_message(
+            f"DB `{db_name}` には Notion データベースが登録されていません。\n`/notion add` で追加できます。",
+            ephemeral=True,
+        )
+        return
+
+    lines = []
+    for entry in databases:
+        label_part = f" — {entry['label']}" if entry["label"] else ""
+        lines.append(f"- `{entry['id']}`{label_part}")
+    await interaction.response.send_message(
+        f"**DB `{db_name}` の Notion データベース一覧**\n" + "\n".join(lines),
+        ephemeral=True,
+    )
+
+
 bot.tree.add_command(db_group)
 bot.tree.add_command(memory_group)
 bot.tree.add_command(rag_group)
+bot.tree.add_command(notion_group)
 
 
 def run(token: str):

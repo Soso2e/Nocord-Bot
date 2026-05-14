@@ -518,3 +518,64 @@ def rag_list_sources(db_name: str) -> list[str]:
 def memory_delete(db_name: str, memory_id: int) -> bool:
     """Delete a single memory entry by ID. Returns True if deleted."""
     return delete_memory(db_name, memory_id)
+
+
+# ---------------------------------------------------------------------------
+# Notion management helpers
+# ---------------------------------------------------------------------------
+
+def notion_enable(db_name: str, api_key: str | None = None) -> None:
+    cfg = _load_db_config(db_name)
+    notion = cfg.setdefault("notion", {})
+    notion["enabled"] = True
+    if api_key:
+        notion["api_key"] = api_key
+    _save_db_config(db_name, cfg)
+
+
+def notion_disable(db_name: str) -> None:
+    cfg = _load_db_config(db_name)
+    cfg.setdefault("notion", {})["enabled"] = False
+    _save_db_config(db_name, cfg)
+
+
+def notion_add_database(db_name: str, database_id: str, label: str = "") -> None:
+    cfg = _load_db_config(db_name)
+    notion = cfg.setdefault("notion", {})
+    ids: list[str] = notion.setdefault("database_ids", [])
+    if database_id in ids:
+        raise ValueError(f"データベースID `{database_id}` はすでに登録されています")
+    ids.append(database_id)
+    if label:
+        notion.setdefault("database_labels", {})[database_id] = label
+    _save_db_config(db_name, cfg)
+
+
+def notion_remove_database(db_name: str, database_id: str) -> bool:
+    cfg = _load_db_config(db_name)
+    notion = cfg.setdefault("notion", {})
+    ids: list[str] = notion.get("database_ids", [])
+    if database_id not in ids:
+        return False
+    ids.remove(database_id)
+    notion.get("database_labels", {}).pop(database_id, None)
+    _save_db_config(db_name, cfg)
+    return True
+
+
+def notion_list_databases(db_name: str) -> list[dict]:
+    cfg = _load_db_config(db_name)
+    notion = cfg.get("notion", {})
+    ids: list[str] = notion.get("database_ids", [])
+    labels: dict[str, str] = notion.get("database_labels", {})
+    return [{"id": db_id, "label": labels.get(db_id, "")} for db_id in ids]
+
+
+def notion_get_status(db_name: str) -> dict:
+    cfg = _load_db_config(db_name)
+    notion = cfg.get("notion", {})
+    return {
+        "enabled": notion.get("enabled", False),
+        "database_count": len(notion.get("database_ids", [])),
+        "has_api_key": bool(notion.get("api_key")),
+    }
