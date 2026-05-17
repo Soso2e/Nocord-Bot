@@ -909,6 +909,113 @@ async def rag_clear(interaction: discord.Interaction):
     )
 
 
+@notion_group.command(name="on", description="Notion連携を有効にする（APIキーも同時に設定）")
+@app_commands.describe(api_key="Notion Integration Token（secret_xxx...）")
+async def notion_on(interaction: discord.Interaction, api_key: str):
+    if not _require_guild(interaction):
+        await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
+        return
+    if not _has_manage_guild(interaction):
+        await _send_permission_error(interaction)
+        return
+    if not api_key.startswith("secret_"):
+        await interaction.response.send_message(
+            "APIキーは `secret_` で始まるIntegration Tokenを指定してください。",
+            ephemeral=True,
+        )
+        return
+
+    db_name = _db(interaction.guild.id)
+    chat_controller.notion_enable(db_name, api_key)
+    await interaction.response.send_message(
+        f"DB `{db_name}` のNotion連携を有効にしました。\n"
+        "次に `/notion db add <データベースID>` でNotionのDBを登録してください。",
+        ephemeral=True,
+    )
+
+
+@notion_group.command(name="off", description="Notion連携を無効にする")
+async def notion_off(interaction: discord.Interaction):
+    if not _require_guild(interaction):
+        await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
+        return
+    if not _has_manage_guild(interaction):
+        await _send_permission_error(interaction)
+        return
+
+    db_name = _db(interaction.guild.id)
+    chat_controller.notion_disable(db_name)
+    await interaction.response.send_message(
+        f"DB `{db_name}` のNotion連携を無効にしました。",
+        ephemeral=True,
+    )
+
+
+notion_db_group = app_commands.Group(name="db", description="連携するNotionデータベースIDを管理する", parent=notion_group)
+
+
+@notion_db_group.command(name="add", description="連携するNotionデータベースIDを追加する")
+@app_commands.describe(database_id="NotionのデータベースID（UUID形式）")
+async def notion_db_add(interaction: discord.Interaction, database_id: str):
+    if not _require_guild(interaction):
+        await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
+        return
+    if not _has_manage_guild(interaction):
+        await _send_permission_error(interaction)
+        return
+
+    db_name = _db(interaction.guild.id)
+    added = chat_controller.notion_db_add(db_name, database_id.strip())
+    if not added:
+        await interaction.response.send_message(
+            f"`{database_id}` はすでに登録されています。",
+            ephemeral=True,
+        )
+        return
+    await interaction.response.send_message(
+        f"NotionデータベースID `{database_id}` を登録しました。\n"
+        "`/notion search <キーワード>` で検索できるか確認できます。",
+        ephemeral=True,
+    )
+
+
+@notion_db_group.command(name="remove", description="登録済みのNotionデータベースIDを削除する")
+async def notion_db_remove(interaction: discord.Interaction):
+    if not _require_guild(interaction):
+        await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
+        return
+    if not _has_manage_guild(interaction):
+        await _send_permission_error(interaction)
+        return
+
+    db_name = _db(interaction.guild.id)
+    info = chat_controller.notion_get_status(db_name)
+    ids = info["database_ids"]
+    if not ids:
+        await interaction.response.send_message("登録済みのNotionデータベースIDがありません。", ephemeral=True)
+        return
+
+    options = [discord.SelectOption(label=d[:100], value=d[:100]) for d in ids[:25]]
+    select = discord.ui.Select(placeholder="削除するデータベースIDを選んでください", options=options)
+
+    async def on_select(select_interaction: discord.Interaction):
+        chosen = select_interaction.data["values"][0]
+        chat_controller.notion_db_remove(db_name, chosen)
+        await select_interaction.response.edit_message(
+            content=f"NotionデータベースID `{chosen}` を削除しました。",
+            view=None,
+        )
+
+    select.callback = on_select
+    view = discord.ui.View(timeout=60)
+    view.add_item(select)
+    await interaction.response.send_message(
+        f"DB `{db_name}` から削除するNotionデータベースIDを選んでください。",
+        view=view,
+        ephemeral=True,
+    )
+
+
 @notion_group.command(name="status", description="現在のDBのNotion連携設定とAPI疎通を確認する")
 async def notion_status(interaction: discord.Interaction):
     if not _require_guild(interaction):

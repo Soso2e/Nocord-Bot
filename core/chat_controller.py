@@ -520,6 +520,43 @@ def memory_delete(db_name: str, memory_id: int) -> bool:
     return delete_memory(db_name, memory_id)
 
 
+def notion_enable(db_name: str, api_key: str) -> None:
+    cfg = _load_db_config(db_name)
+    cfg.setdefault("notion", {})["enabled"] = True
+    cfg["notion"]["api_key"] = api_key
+    _save_db_config(db_name, cfg)
+
+
+def notion_disable(db_name: str) -> None:
+    cfg = _load_db_config(db_name)
+    cfg.setdefault("notion", {})["enabled"] = False
+    _save_db_config(db_name, cfg)
+
+
+def notion_db_add(db_name: str, database_id: str) -> bool:
+    """Add a Notion database ID. Returns False if already registered."""
+    cfg = _load_db_config(db_name)
+    notion_cfg = cfg.setdefault("notion", {})
+    ids: list = notion_cfg.setdefault("database_ids", [])
+    normalized = database_id.strip()
+    if normalized in ids:
+        return False
+    ids.append(normalized)
+    _save_db_config(db_name, cfg)
+    return True
+
+
+def notion_db_remove(db_name: str, database_id: str) -> bool:
+    """Remove a Notion database ID. Returns False if not found."""
+    cfg = _load_db_config(db_name)
+    ids: list = cfg.get("notion", {}).get("database_ids", [])
+    if database_id not in ids:
+        return False
+    ids.remove(database_id)
+    _save_db_config(db_name, cfg)
+    return True
+
+
 def notion_get_status(db_name: str) -> dict:
     """Return Notion config and connectivity info for the given DB."""
     cfg = _load_db_config(db_name)
