@@ -27,6 +27,8 @@ _SELF_NAME_PATTERNS = [
 ]
 _MEMORY_CAPTURE_MAX_LINES = 40
 _MEMORY_CAPTURE_MAX_CHARS = 6000
+_NOTION_ASCII_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{1,}")
+_NOTION_QUOTED_RE = re.compile(r"[「『\"']([^」』\"']{2,})[」』\"']")
 
 
 def _db_dir(db_name: str) -> Path:
@@ -199,6 +201,71 @@ def _build_synthesis_messages(
     ]
 
 
+def _build_notion_search_queries(message: str, max_queries: int = 4) -> list[str]:
+    """Build robust Notion search queries from natural chat text.
+
+    Notion search is sensitive to query wording. A page that matches "cad" may not
+    match "cadについて何か情報ある", so chat requests should try the original text
+    plus compact keyword candidates.
+    """
+    queries: list[str] = []
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", value).strip(" 　?？!！。、「」『』\"'")
+        if cleaned and cleaned.lower() not in {q.lower() for q in queries}:
+            queries.append(cleaned)
+
+    add(message)
+
+    for match in _NOTION_QUOTED_RE.finditer(message):
+        add(match.group(1))
+
+    for token in _NOTION_ASCII_TOKEN_RE.findall(message):
+        add(token)
+
+    return queries[:max_queries]
+
+
+async def _search_notion_pages(
+    message: str,
+    database_ids: list[str],
+    api_key: str,
+    max_results: int,
+    errors: list[str] | None = None,
+) -> list[dict]:
+    from core import notion_client
+
+    pages: list[dict] = []
+    seen_ids: set[str] = set()
+
+    for query in _build_notion_search_queries(message):
+        if len(pages) >= max_results:
+            break
+        try:
+            found = await notion_client.search_pages(
+                query,
+                database_ids,
+                api_key,
+                max_results,
+            )
+        except Exception as exc:
+            error = f"{query}: {exc}"
+            if errors is not None:
+                errors.append(error)
+            print(f"[Notion] Search failed for query '{query}': {exc}")
+            continue
+
+        for page in found:
+            page_id = page.get("id", "")
+            if page_id and page_id not in seen_ids:
+                seen_ids.add(page_id)
+                pages.append(page)
+                if len(pages) >= max_results:
+                    break
+
+    return pages
+
+
 async def _process_with_notion(
     message: str,
     session_id: str,
@@ -220,14 +287,8 @@ async def _process_with_notion(
     pdf_property: str = notion_cfg.get("pdf_property", "PDF")
     max_results: int = notion_cfg.get("max_results", 5)
 
-    # Search Notion
-    notion_pages: list[dict] = []
-    try:
-        notion_pages = await notion_client.search_pages(
-            message, database_ids, api_key, max_results
-        )
-    except Exception as exc:
-        print(f"[Notion] Search failed: {exc}")
+    # Search Notion. Try the chat text first, then compact keyword variants.
+    notion_pages = await _search_notion_pages(message, database_ids, api_key, max_results)
 
     # Sync PDFs to RAG for new/updated pages
     for page in notion_pages:
@@ -586,10 +647,10 @@ async def notion_test_search(db_name: str, query: str) -> dict:
 
     database_ids = notion_cfg.get("database_ids", [])
     max_results = notion_cfg.get("max_results", 5)
-    try:
-        pages = await notion_client.search_pages(query, database_ids, api_key, max_results)
-    except Exception as exc:
-        return {"pages": [], "error": str(exc)}
+    errors: list[str] = []
+    pages = await _search_notion_pages(query, database_ids, api_key, max_results, errors)
+    if not pages and errors:
+        return {"pages": [], "error": "\n".join(errors)}
 
     return {
         "pages": [
