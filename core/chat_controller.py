@@ -1,5 +1,7 @@
 import json
+import inspect
 import re
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from core.context_builder import build_messages, list_available_dbs
@@ -18,6 +20,7 @@ from core.memory_manager import (
 )
 
 _llm = LLMClient()
+ProgressCallback = Callable[[str], Awaitable[None] | None]
 _DB_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{3,32}$")
 _MEMORY_JSON_RE = re.compile(r"\[[\s\S]*\]")
 _HISTORY_LINE_RE = re.compile(r"^\[(?P<user_id>\d+)\|(?P<name>[^\]]+)\]:\s*(?P<content>.+)$")
@@ -46,6 +49,17 @@ def _default_db_config(db_name: str) -> dict:
         },
         "allowed_tools": ["save_memory"],
     }
+
+
+async def _emit_progress(progress: ProgressCallback | None, message: str) -> None:
+    if progress is None:
+        return
+    try:
+        result = progress(message)
+        if inspect.isawaitable(result):
+            await result
+    except Exception as exc:
+        print(f"[Progress] Callback failed: {exc}")
 
 
 def _memory_extraction_messages(history_text: str, existing_memories: list[str] | None = None) -> list[dict]:
@@ -266,12 +280,33 @@ async def _search_notion_pages(
     return pages
 
 
+def _format_notion_page_ref(page: dict) -> str:
+    from core import notion_client
+
+    title = notion_client.get_page_title(page) or "Untitled"
+    page_id = page.get("id", "")
+    url = page.get("url") or (f"https://www.notion.so/{page_id.replace('-', '')}" if page_id else "")
+    if url:
+        return f"[{title}]({url})"
+    return f"{title} (`{page_id}`)"
+
+
+def _format_notion_found_message(pages: list[dict]) -> str:
+    if not pages:
+        return "Notionで該当ページは見つかりませんでした"
+
+    refs = [_format_notion_page_ref(page) for page in pages[:3]]
+    suffix = f" ほか{len(pages) - 3}件" if len(pages) > 3 else ""
+    return "Notionで該当ページを発見: " + " / ".join(refs) + suffix
+
+
 async def _process_with_notion(
     message: str,
     session_id: str,
     db_name: str,
     cfg: dict,
     notion_cfg: dict,
+    progress: ProgressCallback | None = None,
 ) -> str:
     """2-stage LLM flow: LLM① synthesizes RAG+Notion info, LLM② generates the reply."""
     from core import notion_client, notion_rag_sync
@@ -288,7 +323,9 @@ async def _process_with_notion(
     max_results: int = notion_cfg.get("max_results", 5)
 
     # Search Notion. Try the chat text first, then compact keyword variants.
+    await _emit_progress(progress, "Notionを検索中...")
     notion_pages = await _search_notion_pages(message, database_ids, api_key, max_results)
+    await _emit_progress(progress, _format_notion_found_message(notion_pages))
 
     # Sync PDFs to RAG for new/updated pages
     for page in notion_pages:
@@ -312,6 +349,7 @@ async def _process_with_notion(
     rag_docs: list[dict] = []
     rag_cfg = cfg.get("rag", {})
     if rag_cfg.get("enabled", False):
+        await _emit_progress(progress, "RAGを検索中...")
         try:
             rag_docs = rag_search(
                 db_name,
@@ -335,7 +373,9 @@ async def _process_with_notion(
 
     # No external info found — fall back to the normal single-stage flow
     if not rag_docs and not notion_results:
+        await _emit_progress(progress, "メモリを検索中...")
         messages = build_messages(db_name, session_id, message)
+        await _emit_progress(progress, "回答を生成中...")
         return await _llm.chat(messages)
 
     # LLM① — synthesize RAG + Notion into a compact information summary
@@ -343,9 +383,11 @@ async def _process_with_notion(
     synthesized = await _llm.chat(synthesis_msgs)
 
     # LLM② — generate the final user-facing reply
+    await _emit_progress(progress, "メモリを検索中...")
     final_messages = build_messages_with_synthesized_info(
         db_name, session_id, message, synthesized
     )
+    await _emit_progress(progress, "回答を生成中...")
     return await _llm.chat(final_messages)
 
 
@@ -353,6 +395,7 @@ async def process(
     message: str,
     session_id: str,
     db_name: str = "general",
+    progress: ProgressCallback | None = None,
 ) -> str:
     init_db(db_name)
     cfg = _load_db_config(db_name)
@@ -360,13 +403,21 @@ async def process(
 
     if notion_cfg.get("enabled", False):
         try:
-            reply = await _process_with_notion(message, session_id, db_name, cfg, notion_cfg)
+            reply = await _process_with_notion(message, session_id, db_name, cfg, notion_cfg, progress)
         except Exception as exc:
             print(f"[Notion] Integration error, falling back to standard flow: {exc}")
+            if cfg.get("rag", {}).get("enabled", False):
+                await _emit_progress(progress, "RAGを検索中...")
+            await _emit_progress(progress, "メモリを検索中...")
             messages = build_messages(db_name, session_id, message)
+            await _emit_progress(progress, "回答を生成中...")
             reply = await _llm.chat(messages)
     else:
+        if cfg.get("rag", {}).get("enabled", False):
+            await _emit_progress(progress, "RAGを検索中...")
+        await _emit_progress(progress, "メモリを検索中...")
         messages = build_messages(db_name, session_id, message)
+        await _emit_progress(progress, "回答を生成中...")
         reply = await _llm.chat(messages)
 
     save_message(db_name, session_id, "user", message)

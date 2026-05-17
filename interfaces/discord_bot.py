@@ -70,6 +70,23 @@ def _llm_error_message(error: Exception | str) -> str:
     return f"LLM API 呼び出しに失敗しました: {text}"
 
 
+class _DiscordProgressMessage:
+    def __init__(self, send_message):
+        self._send_message = send_message
+        self._message = None
+        self._lines: list[str] = []
+
+    async def __call__(self, line: str) -> None:
+        if not line or line in self._lines:
+            return
+        self._lines.append(line)
+        content = "**検索状況**\n" + "\n".join(f"- {item}" for item in self._lines)
+        if self._message is None:
+            self._message = await self._send_message(content)
+            return
+        await self._message.edit(content=content)
+
+
 def _track_background_task(task: asyncio.Task) -> None:
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
@@ -220,10 +237,12 @@ async def on_message(message: discord.Message):
                 )
             async with message.channel.typing():
                 try:
+                    progress = _DiscordProgressMessage(message.channel.send)
                     reply = await chat_controller.process(
                         text,
                         _session(message.channel.id),
                         _db(message.guild.id if message.guild else None),
+                        progress=progress,
                     )
                 except RuntimeError as exc:
                     if capture_task is not None:
@@ -259,10 +278,12 @@ async def cmd_chat(ctx: commands.Context, *, text: str):
         )
     async with ctx.typing():
         try:
+            progress = _DiscordProgressMessage(ctx.send)
             reply = await chat_controller.process(
                 text,
                 _session(ctx.channel.id),
                 _db(ctx.guild.id if ctx.guild else None),
+                progress=progress,
             )
         except RuntimeError as exc:
             if capture_task is not None:
@@ -305,10 +326,14 @@ async def slash_chat(interaction: discord.Interaction, text: str):
         )
     await interaction.response.defer(thinking=True)
     try:
+        progress = _DiscordProgressMessage(
+            lambda content: interaction.followup.send(content, wait=True)
+        )
         reply = await chat_controller.process(
             text,
             _session(interaction.channel.id),
             _db(interaction.guild.id if interaction.guild else None),
+            progress=progress,
         )
     except RuntimeError as exc:
         if capture_task is not None:
