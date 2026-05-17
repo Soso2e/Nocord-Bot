@@ -13,11 +13,29 @@ def _load_config() -> dict:
 
 
 class LLMClient:
-    def __init__(self):
-        self._cfg = _load_config()
+    def __init__(self, profile: str | None = None):
+        self._profile = profile
+        self._cfg = self._load_profile_config()
+
+    def _load_profile_config(self) -> dict:
+        cfg = _load_config()
+        if not self._profile:
+            return cfg
+
+        profile_cfg = cfg.get(self._profile, {})
+        if self._profile == "query_llm" and not profile_cfg:
+            profile_cfg = cfg.get("light_llm", {})
+        if not isinstance(profile_cfg, dict) or not profile_cfg:
+            return cfg
+
+        merged = cfg.copy()
+        merged.update(profile_cfg)
+        for key in ("query_llm", "light_llm"):
+            merged.pop(key, None)
+        return merged
 
     def reload(self):
-        self._cfg = _load_config()
+        self._cfg = self._load_profile_config()
 
     def _timeout(self) -> httpx.Timeout:
         raw = self._cfg.get("timeout", 120)
