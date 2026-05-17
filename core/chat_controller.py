@@ -314,6 +314,7 @@ async def _process_with_notion(
     from core.rag_manager import delete_by_source, ingest_text
     from core.rag_manager import search as rag_search
 
+    await _emit_progress(progress, "Notion連携を確認中...")
     api_key = notion_client.get_api_key(notion_cfg)
     if not api_key:
         raise ValueError("Notion API key not configured (set notion.api_key in DB config or NOTION_API_KEY env var)")
@@ -406,6 +407,7 @@ async def process(
             reply = await _process_with_notion(message, session_id, db_name, cfg, notion_cfg, progress)
         except Exception as exc:
             print(f"[Notion] Integration error, falling back to standard flow: {exc}")
+            await _emit_progress(progress, f"Notion検索をスキップ: {exc}")
             if cfg.get("rag", {}).get("enabled", False):
                 await _emit_progress(progress, "RAGを検索中...")
             await _emit_progress(progress, "メモリを検索中...")
@@ -413,6 +415,7 @@ async def process(
             await _emit_progress(progress, "回答を生成中...")
             reply = await _llm.chat(messages)
     else:
+        await _emit_progress(progress, "Notion検索をスキップ: Notion連携が無効です")
         if cfg.get("rag", {}).get("enabled", False):
             await _emit_progress(progress, "RAGを検索中...")
         await _emit_progress(progress, "メモリを検索中...")

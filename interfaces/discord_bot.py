@@ -327,7 +327,7 @@ async def slash_chat(interaction: discord.Interaction, text: str):
     await interaction.response.defer(thinking=True)
     try:
         progress = _DiscordProgressMessage(
-            lambda content: interaction.followup.send(content, wait=True)
+            lambda content: interaction.followup.send(content, ephemeral=True, wait=True)
         )
         reply = await chat_controller.process(
             text,
