@@ -188,6 +188,7 @@ async def _sync_slash_commands() -> None:
 db_group = app_commands.Group(name="db", description="このDiscordサーバーのメモリDBを管理する")
 memory_group = app_commands.Group(name="memory", description="このDiscordサーバーの長期記憶を管理する")
 rag_group = app_commands.Group(name="rag", description="現在のDBのRAG（知識検索）を管理する")
+notion_group = app_commands.Group(name="notion", description="Notion連携の確認・テストを行う")
 
 
 @bot.event
@@ -908,9 +909,89 @@ async def rag_clear(interaction: discord.Interaction):
     )
 
 
+@notion_group.command(name="status", description="現在のDBのNotion連携設定とAPI疎通を確認する")
+async def notion_status(interaction: discord.Interaction):
+    if not _require_guild(interaction):
+        await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
+        return
+
+    db_name = _db(interaction.guild.id)
+    info = chat_controller.notion_get_status(db_name)
+
+    enabled_label = "有効" if info["enabled"] else "無効"
+    key_label = "あり" if info["has_api_key"] else "**なし（未設定）**"
+    db_ids = info["database_ids"]
+    db_ids_label = "\n".join(f"- `{d}`" for d in db_ids) if db_ids else "（なし）"
+
+    color = 0x57F287 if info["enabled"] and info["has_api_key"] else 0x99AAB5
+    embed = discord.Embed(title=f"Notion ステータス — `{db_name}`", color=color)
+    embed.add_field(name="連携", value=enabled_label, inline=True)
+    embed.add_field(name="APIキー", value=key_label, inline=True)
+    embed.add_field(name="PDFプロパティ", value=f"`{info['pdf_property']}`", inline=True)
+    embed.add_field(name="最大取得件数", value=str(info["max_results"]), inline=True)
+    embed.add_field(name="対象データベースID", value=db_ids_label, inline=False)
+
+    if not info["enabled"]:
+        embed.set_footer(text="Notionを有効にするには config.json の notion.enabled を true にしてください。")
+    elif not info["has_api_key"]:
+        embed.set_footer(text="NOTION_API_KEY 環境変数または config.json の notion.api_key を設定してください。")
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@notion_group.command(name="search", description="Notionを実際に検索してボットに何が見えているか確認する")
+@app_commands.describe(query="Notionで検索するキーワード")
+async def notion_search(interaction: discord.Interaction, query: str):
+    if not _require_guild(interaction):
+        await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
+        return
+
+    db_name = _db(interaction.guild.id)
+    info = chat_controller.notion_get_status(db_name)
+
+    if not info["enabled"]:
+        await interaction.response.send_message(
+            "Notion連携が無効です。`/notion status` で設定を確認してください。",
+            ephemeral=True,
+        )
+        return
+    if not info["has_api_key"]:
+        await interaction.response.send_message(
+            "Notion APIキーが設定されていません。`/notion status` で設定を確認してください。",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    result = await chat_controller.notion_test_search(db_name, query)
+
+    if result["error"]:
+        await interaction.followup.send(
+            f"Notion検索でエラーが発生しました:\n```\n{result['error']}\n```",
+            ephemeral=True,
+        )
+        return
+
+    pages = result["pages"]
+    if not pages:
+        await interaction.followup.send(
+            f"「{query}」に一致するNotionページが見つかりませんでした。\n"
+            "（データベースIDの設定やページの公開設定を確認してください）",
+            ephemeral=True,
+        )
+        return
+
+    lines = [f"`{i + 1}.` {p['title'] or '（タイトルなし）'}  `{p['id']}`" for i, p in enumerate(pages)]
+    await interaction.followup.send(
+        f"**Notion検索結果** — 「{query}」（DB: `{db_name}`）\n" + "\n".join(lines),
+        ephemeral=True,
+    )
+
+
 bot.tree.add_command(db_group)
 bot.tree.add_command(memory_group)
 bot.tree.add_command(rag_group)
+bot.tree.add_command(notion_group)
 
 
 def run(token: str):

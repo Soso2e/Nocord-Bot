@@ -518,3 +518,46 @@ def rag_list_sources(db_name: str) -> list[str]:
 def memory_delete(db_name: str, memory_id: int) -> bool:
     """Delete a single memory entry by ID. Returns True if deleted."""
     return delete_memory(db_name, memory_id)
+
+
+def notion_get_status(db_name: str) -> dict:
+    """Return Notion config and connectivity info for the given DB."""
+    cfg = _load_db_config(db_name)
+    notion_cfg = cfg.get("notion", {})
+    from core import notion_client
+    api_key = notion_client.get_api_key(notion_cfg)
+    return {
+        "enabled": notion_cfg.get("enabled", False),
+        "has_api_key": bool(api_key),
+        "database_ids": notion_cfg.get("database_ids", []),
+        "pdf_property": notion_cfg.get("pdf_property", "PDF"),
+        "max_results": notion_cfg.get("max_results", 5),
+    }
+
+
+async def notion_test_search(db_name: str, query: str) -> dict:
+    """Run a test Notion search and return pages found (titles + page IDs).
+
+    Returns dict with keys: pages (list of {title, id}), error (str or None).
+    """
+    cfg = _load_db_config(db_name)
+    notion_cfg = cfg.get("notion", {})
+    from core import notion_client
+    api_key = notion_client.get_api_key(notion_cfg)
+    if not api_key:
+        return {"pages": [], "error": "APIキーが設定されていません"}
+
+    database_ids = notion_cfg.get("database_ids", [])
+    max_results = notion_cfg.get("max_results", 5)
+    try:
+        pages = await notion_client.search_pages(query, database_ids, api_key, max_results)
+    except Exception as exc:
+        return {"pages": [], "error": str(exc)}
+
+    return {
+        "pages": [
+            {"title": notion_client.get_page_title(p), "id": p.get("id", "")}
+            for p in pages
+        ],
+        "error": None,
+    }
