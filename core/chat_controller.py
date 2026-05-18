@@ -181,14 +181,16 @@ def _prepare_history_for_memory_extraction(history_lines: list[str]) -> str:
 
 
 _SYNTHESIS_SYSTEM_PROMPT = (
-    "あなたは情報統制アシスタントです。複数の情報源（RAG知識ベース・Notion）から得られた情報を"
-    "統合・要約し、ユーザーの質問に答えるための簡潔な情報サマリーを日本語で生成してください。\n\n"
+    "あなたは情報抽出アシスタントです。提供された情報源（RAG知識ベース・Notion）から"
+    "ユーザーの質問に直接答えるために必要な情報を抽出・整理してください。\n\n"
     "ルール:\n"
+    "- ユーザーの質問に直接答えられる事実・数値・固有名詞・手順を優先して抽出する\n"
     "- 重複情報は1つにまとめる\n"
     "- 矛盾する情報がある場合は両方を記載し「※情報源間で矛盾あり」と注記する\n"
     "- 質問に無関係な情報は省略する\n"
-    "- 情報がない場合は「関連情報なし」のみ返す\n"
-    "- 推測や補完は行わず、提供された情報のみを使う"
+    "- 推測や補完は行わず、提供された情報のみを使う\n"
+    "- 関連情報がない場合は「関連情報なし」のみ返す\n"
+    "- 出典ごとに箇条書きで整理し、後続の回答生成に使いやすい形式にする"
 )
 
 
@@ -321,14 +323,16 @@ async def _search_notion_pages(
     api_key: str,
     max_results: int,
     errors: list[str] | None = None,
+    max_candidates: int | None = None,
 ) -> list[dict]:
     from core import notion_client
 
     pages: list[dict] = []
     seen_ids: set[str] = set()
+    _limit = max_candidates or max_results
 
     for query in queries:
-        if len(pages) >= max_results:
+        if len(pages) >= _limit:
             break
         try:
             found = await notion_client.search_pages(
@@ -349,7 +353,7 @@ async def _search_notion_pages(
             if page_id and page_id not in seen_ids:
                 seen_ids.add(page_id)
                 pages.append(page)
-                if len(pages) >= max_results:
+                if len(pages) >= _limit:
                     break
 
     return pages
@@ -443,7 +447,10 @@ async def _process_with_notion(
         await _emit_progress(progress, "検索語を選定できませんでした")
 
     await _emit_progress(progress, "Notionを検索中...")
-    notion_pages = await _search_notion_pages(search_queries, database_ids, api_key, max_results)
+    notion_pages = await _search_notion_pages(
+        search_queries, database_ids, api_key, max_results,
+        max_candidates=max_results * 4,
+    )
     if notion_pages:
         await _emit_progress(progress, f"Notion候補を{len(notion_pages)}件取得")
 
@@ -481,9 +488,11 @@ async def _process_with_notion(
         except Exception:
             pass
 
-    # Fetch Notion page texts
+    # Fetch Notion page texts — stop once max_results confirmed pages are collected
     notion_results: list[dict] = []
     for page in notion_pages:
+        if len(notion_results) >= max_results:
+            break
         try:
             title = notion_client.get_page_title(page)
             text = await notion_client.get_page_text(page["id"], api_key)

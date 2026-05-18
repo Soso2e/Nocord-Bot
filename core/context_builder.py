@@ -12,6 +12,15 @@ _RAG_CONSTRAINT = (
     "- 推測や不確かな情報を事実として述べないでください。"
 )
 
+# Appended to system_prompt when synthesized Notion/RAG info is provided
+_SYNTHESIZED_INFO_CONSTRAINT = (
+    "\n\n以下のルールに従って回答してください：\n"
+    "- 「参照情報」がある場合、それを最優先で使用してユーザーの質問に直接答えてください。\n"
+    "- 質問には必ず直接的に答えること（事実・数値・名前・手順など具体的に）。\n"
+    "- 参照情報に答えが含まれない場合は「提供された情報には含まれていません」と正直に答えてください。\n"
+    "- 推測や不確かな情報を事実として述べないでください。"
+)
+
 
 def _load_db_config(db_name: str) -> dict:
     path = DB_BASE / db_name / "config.json"
@@ -85,12 +94,12 @@ def build_messages_with_synthesized_info(
     history = get_history(db_name, session_id, limit=max_ctx)
     memories = find_relevant_memories(db_name, user_input, limit=5)
 
-    messages = [{"role": "system", "content": system_prompt}]
+    messages = [{"role": "system", "content": system_prompt + _SYNTHESIZED_INFO_CONSTRAINT}]
 
     if synthesized_info:
         messages.append({
             "role": "system",
-            "content": "統制済み情報（RAG・Notion検索結果を統合）:\n" + synthesized_info,
+            "content": "参照情報（RAG・Notion検索結果）:\n" + synthesized_info,
         })
 
     if memories:

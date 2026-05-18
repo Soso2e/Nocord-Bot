@@ -60,7 +60,7 @@ async def search_pages(
             if _normalize_id(p.get("parent", {}).get("database_id", "")) in normalized_db_ids
         ]
 
-    return results[:max_results]
+    return results
 
 
 def get_page_title(page: dict) -> str:
