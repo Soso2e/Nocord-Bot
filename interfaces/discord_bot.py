@@ -935,7 +935,7 @@ async def rag_clear(interaction: discord.Interaction):
 
 
 @notion_group.command(name="on", description="Notion連携を有効にする（APIキーも同時に設定）")
-@app_commands.describe(api_key="Notion Integration Token（secret_xxx...）")
+@app_commands.describe(api_key="Notion Integration Token（secret_xxx... または ntn_xxx...）")
 async def notion_on(interaction: discord.Interaction, api_key: str):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -943,9 +943,9 @@ async def notion_on(interaction: discord.Interaction, api_key: str):
     if not _has_manage_guild(interaction):
         await _send_permission_error(interaction)
         return
-    if not api_key.startswith("secret_"):
+    if not (api_key.startswith("secret_") or api_key.startswith("ntn_")):
         await interaction.response.send_message(
-            "APIキーは `secret_` で始まるIntegration Tokenを指定してください。",
+            "APIキーは `secret_` または `ntn_` で始まるIntegration Tokenを指定してください。",
             ephemeral=True,
         )
         return
