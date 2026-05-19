@@ -1,0 +1,1198 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nocord-Bot — Workflow Visualization</title>
+<style>
+:root {
+  --bg:#0c1117; --bg-2:#11171f; --panel:#161d27; --line:#2a3340;
+  --text:#d6dde6; --muted:#8a94a3;
+  --edge:#2c3441; --edge-active:#ffd166; --edge-active-glow:rgba(255,209,102,0.55);
+  --anno-h:300px;
+  font-family:-apple-system,"Segoe UI","Hiragino Sans","Yu Gothic UI",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);overflow:hidden;height:100vh}
+#app{
+  display:grid;
+  grid-template-columns:320px 1fr;
+  grid-template-rows:auto 1fr 6px var(--anno-h);
+  grid-template-areas:"header header""sidebar canvas""sidebar resizer""sidebar annotations";
+  height:100vh;
+}
+/* Header */
+#header{
+  grid-area:header;background:var(--bg-2);border-bottom:1px solid var(--line);
+  padding:10px 16px;display:flex;align-items:center;gap:16px;
+}
+#header h1{font-size:14px;font-weight:700;letter-spacing:.04em;color:var(--text)}
+#header .path{font-size:11px;color:var(--muted);font-family:monospace}
+#header .hint{margin-left:auto;font-size:11px;color:var(--muted)}
+#header .hint kbd{
+  background:var(--panel);border:1px solid var(--line);border-radius:3px;
+  padding:1px 5px;font-size:10px;color:var(--text);
+}
+/* Sidebar */
+#sidebar{
+  grid-area:sidebar;background:var(--bg-2);border-right:1px solid var(--line);
+  overflow-y:auto;display:flex;flex-direction:column;
+}
+#flow-list{padding:8px;flex:1}
+#flow-list h2{font-size:10px;font-weight:700;letter-spacing:.12em;color:var(--muted);
+  padding:6px 8px 4px;text-transform:uppercase}
+.flow-btn{
+  display:flex;align-items:center;gap:8px;width:100%;text-align:left;
+  background:none;border:none;border-radius:6px;cursor:pointer;
+  padding:8px 10px;margin-bottom:2px;color:var(--text);
+  transition:background .15s;
+}
+.flow-btn:hover{background:var(--panel)}
+.flow-btn.active{background:rgba(255,209,102,.12);border-left:2px solid var(--edge-active)}
+.flow-btn .icon{font-size:15px;flex-shrink:0}
+.flow-btn .label{font-size:12px;font-weight:600;line-height:1.2}
+.flow-btn .sub{font-size:10px;color:var(--muted);margin-top:1px}
+/* Legend */
+#legend{padding:10px 12px;border-top:1px solid var(--line)}
+#legend h2{font-size:10px;font-weight:700;letter-spacing:.12em;color:var(--muted);
+  margin-bottom:6px;text-transform:uppercase}
+.legend-row{display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:11px}
+.legend-dot{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+/* Reset button */
+#reset-btn{
+  margin:8px 12px 12px;padding:7px;border-radius:6px;border:1px solid var(--line);
+  background:var(--panel);color:var(--muted);font-size:12px;cursor:pointer;
+  transition:color .15s,border-color .15s;
+}
+#reset-btn:hover{color:var(--text);border-color:var(--muted)}
+/* Canvas */
+#canvas{
+  grid-area:canvas;background:var(--bg);overflow:hidden;position:relative;cursor:grab;
+}
+#canvas.panning{cursor:grabbing}
+#main-svg{width:100%;height:100%;display:block}
+/* Resizer */
+#resizer{
+  grid-area:resizer;background:var(--line);cursor:ns-resize;
+  transition:background .15s;
+}
+#resizer:hover,#resizer.dragging{background:var(--edge-active)}
+/* Annotations */
+#annotations{
+  grid-area:annotations;background:var(--bg-2);border-top:1px solid var(--line);
+  overflow-y:auto;padding:10px 16px;
+}
+#anno-title{font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--muted);
+  text-transform:uppercase;margin-bottom:8px}
+#anno-list{list-style:none;counter-reset:steps}
+#anno-list li{
+  counter-increment:steps;display:flex;gap:10px;align-items:flex-start;
+  padding:6px 8px;border-radius:6px;cursor:pointer;margin-bottom:3px;
+  transition:background .15s;
+}
+#anno-list li:hover{background:var(--panel)}
+#anno-list li.focused{background:rgba(255,209,102,.1);border-left:2px solid var(--edge-active)}
+#anno-list li::before{
+  content:counter(steps);
+  min-width:20px;height:20px;border-radius:50%;background:var(--panel);
+  color:var(--muted);font-size:10px;font-weight:700;display:flex;
+  align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;
+}
+#anno-list li.focused::before{background:var(--edge-active);color:#1a1100}
+.anno-route{font-family:monospace;font-size:11px;font-weight:700;color:var(--text)}
+.anno-arrow{color:var(--muted);margin:0 4px}
+.anno-passes{
+  display:block;font-size:10px;color:var(--muted);margin-top:3px;
+  background:rgba(255,255,255,.04);border-left:2px solid var(--edge-active);
+  border-radius:0 3px 3px 0;padding:2px 6px;font-family:monospace;
+}
+.anno-note{display:block;font-size:10px;color:var(--muted);margin-top:2px;font-style:italic}
+.anno-body{flex:1;min-width:0}
+/* Tooltip */
+#tooltip{
+  position:fixed;z-index:9999;pointer-events:none;opacity:0;
+  background:rgba(14,20,28,.97);border:1px solid var(--edge-active);
+  border-radius:8px;padding:10px 12px;max-width:320px;
+  font-size:12px;transition:opacity .12s;
+  backdrop-filter:blur(6px);
+}
+#tooltip.visible{opacity:1}
+#tooltip .tt-title{font-weight:700;color:var(--edge-active);margin-bottom:4px}
+#tooltip .tt-route{font-family:monospace;font-size:11px;color:var(--text);margin-bottom:4px}
+#tooltip .tt-step{border-top:1px solid var(--line);padding-top:4px;margin-top:4px}
+#tooltip .tt-passes{
+  font-family:monospace;font-size:10px;color:var(--muted);
+  background:rgba(255,255,255,.05);border-radius:3px;padding:2px 5px;
+  display:block;margin-top:2px;white-space:pre-wrap;word-break:break-all;
+}
+#tooltip .tt-note{font-size:10px;color:var(--muted);font-style:italic;margin-top:2px}
+/* SVG node styles */
+.node-rect{transition:opacity .25s,filter .25s}
+.node-rect.dim{opacity:.18}
+.node-text-title{font-size:12px;font-weight:700;fill:var(--text);pointer-events:none}
+.node-text-sub{font-size:10px;fill:var(--muted);pointer-events:none}
+/* SVG edge styles */
+.edge-path{fill:none;stroke:var(--edge);stroke-width:1.5;transition:opacity .25s}
+.edge-path.active{stroke:var(--edge-active);stroke-width:2.5}
+.edge-path.dim{opacity:.1}
+.edge-path.focused-edge{stroke:var(--edge-active);stroke-width:2.8;animation:edge-pulse 1.1s ease-in-out infinite}
+/* Badge styles */
+.edge-step-badge{cursor:pointer}
+.edge-step-halo{fill:none;stroke:var(--edge-active);stroke-width:1.5;opacity:0;pointer-events:none}
+.edge-step-badge.focused .edge-step-halo{animation:halo-burst 1.3s ease-out infinite}
+.edge-step-pill{fill:var(--panel);stroke:var(--muted);stroke-width:1px;transition:fill .15s,stroke .15s}
+.edge-step-badge:hover .edge-step-pill,.edge-step-badge.hovered .edge-step-pill{fill:var(--bg-2);stroke:var(--edge-active)}
+.edge-step-badge.focused .edge-step-pill{fill:var(--edge-active);stroke:#fff8d6}
+.edge-step-text{font-size:10px;font-weight:700;fill:var(--muted);pointer-events:none;transition:fill .15s}
+.edge-step-badge:hover .edge-step-text,.edge-step-badge.hovered .edge-step-text{fill:var(--edge-active)}
+.edge-step-badge.focused .edge-step-text{fill:#1a1100}
+.edge-step-scale{transform-origin:center;transform-box:fill-box}
+.edge-step-badge.focused .edge-step-scale{animation:pulse 0.9s cubic-bezier(.36,.07,.19,.97) infinite}
+/* Tether */
+.badge-tether{fill:none;stroke:var(--muted);stroke-width:.8;stroke-dasharray:2,3;opacity:.6;pointer-events:none}
+/* Column header */
+.col-label{font-size:10px;font-weight:700;letter-spacing:.14em;fill:var(--muted);text-transform:uppercase}
+.col-divider{stroke:var(--line);stroke-dasharray:3,5}
+/* Keyframes */
+@keyframes pulse{
+  0%,100%{transform:scale(1);filter:drop-shadow(0 0 2px #fff8)drop-shadow(0 0 5px var(--edge-active))drop-shadow(0 0 12px var(--edge-active-glow))}
+  50%{transform:scale(1.42);filter:drop-shadow(0 0 4px #fffb)drop-shadow(0 0 8px var(--edge-active))drop-shadow(0 0 20px var(--edge-active-glow))}
+}
+@keyframes halo-burst{
+  0%{transform:scale(.55);opacity:.85;transform-origin:center;transform-box:fill-box}
+  100%{transform:scale(3);opacity:0;transform-origin:center;transform-box:fill-box}
+}
+@keyframes edge-pulse{
+  0%,100%{stroke-width:2.8;stroke:var(--edge-active);filter:drop-shadow(0 0 3px var(--edge-active-glow))}
+  50%{stroke-width:4.2;stroke:#fff;filter:drop-shadow(0 0 7px var(--edge-active))}
+}
+@keyframes node-glow{
+  0%,100%{filter:drop-shadow(0 0 4px var(--edge-active-glow))}
+  50%{filter:drop-shadow(0 0 10px #fff6)}
+}
+@keyframes anno-flash{
+  0%{background:rgba(255,209,102,.4)}
+  100%{background:rgba(255,209,102,.08)}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header id="header">
+    <h1>Nocord-Bot</h1>
+    <span class="path">Workflow Visualization</span>
+    <span class="hint">
+      <kbd>1</kbd>–<kbd>9</kbd> フロー選択 &nbsp;
+      <kbd>F</kbd> フィット &nbsp;
+      <kbd>+</kbd><kbd>-</kbd> ズーム &nbsp;
+      <kbd>Esc</kbd> 解除
+    </span>
+  </header>
+  <aside id="sidebar">
+    <div id="flow-list">
+      <h2>Flows</h2>
+    </div>
+    <div id="legend">
+      <h2>Legend</h2>
+    </div>
+    <button id="reset-btn">全体表示にリセット (F)</button>
+  </aside>
+  <div id="canvas">
+    <svg id="main-svg" xmlns="http://www.w3.org/2000/svg">
+      <defs id="svg-defs"></defs>
+      <g id="col-layer"></g>
+      <g id="edge-layer"></g>
+      <g id="node-layer"></g>
+      <g id="badge-layer"></g>
+    </svg>
+  </div>
+  <div id="resizer"></div>
+  <div id="annotations">
+    <div id="anno-title">フローを選択してください</div>
+    <ol id="anno-list"></ol>
+  </div>
+</div>
+<div id="tooltip"></div>
+
+<script type="application/json" id="workflow-data">
+{
+  "viewBox": { "w": 1500, "h": 900 },
+  "columns": [
+    { "id": "col_ext",   "label": "EXTERNAL",       "x": 110,  "divider": 235  },
+    { "id": "col_iface", "label": "INTERFACES",      "x": 390,  "divider": 520  },
+    { "id": "col_ctrl",  "label": "CONTROLLER",      "x": 660,  "divider": 790  },
+    { "id": "col_core",  "label": "CORE SERVICES",   "x": 965,  "divider": 1095 },
+    { "id": "col_store", "label": "STORAGE / LLM",   "x": 1280, "divider": 1480 }
+  ],
+  "groups": [
+    { "id": "grp_ext",   "label": "外部",           "stroke": "#6c757d", "fill": "#161a1d", "sub": "#4a5060" },
+    { "id": "grp_iface", "label": "インターフェース", "stroke": "#4cc9f0", "fill": "#0b2330", "sub": "#2a8ca8" },
+    { "id": "grp_ctrl",  "label": "コントローラー",   "stroke": "#f77f00", "fill": "#2a1500", "sub": "#b05c00" },
+    { "id": "grp_core",  "label": "コアサービス",     "stroke": "#c77dff", "fill": "#1a0a2e", "sub": "#8855cc" },
+    { "id": "grp_store", "label": "ストレージ/LLM",   "stroke": "#52b788", "fill": "#0a1f14", "sub": "#348055" }
+  ],
+  "nodes": [
+    { "id": "discord_user",    "title": "Discord User",       "subtitle": "ユーザー / サーバー管理者",    "group": "grp_ext",   "x": 10,   "y": 80,  "w": 200, "h": 56 },
+    { "id": "slack_user",      "title": "Slack User",         "subtitle": "ワークスペースメンバー",       "group": "grp_ext",   "x": 10,   "y": 172, "w": 200, "h": 56 },
+    { "id": "http_client",     "title": "HTTP Client",        "subtitle": "外部アプリ / curl",           "group": "grp_ext",   "x": 10,   "y": 264, "w": 200, "h": 56 },
+    { "id": "cli_user",        "title": "CLI / Admin",        "subtitle": "python scripts/ingest.py",   "group": "grp_ext",   "x": 10,   "y": 380, "w": 200, "h": 56 },
+
+    { "id": "discord_bot",     "title": "discord_bot.py",     "subtitle": "discord.py Bot + Slash",     "group": "grp_iface", "x": 280,  "y": 80,  "w": 220, "h": 56 },
+    { "id": "slack_bot",       "title": "slack_bot.py",       "subtitle": "Bolt AsyncApp + Socket",     "group": "grp_iface", "x": 280,  "y": 172, "w": 220, "h": 56 },
+    { "id": "http_api",        "title": "http_api.py",        "subtitle": "FastAPI / uvicorn",          "group": "grp_iface", "x": 280,  "y": 264, "w": 220, "h": 56 },
+    { "id": "ingest_cli",      "title": "scripts/ingest.py",  "subtitle": "CLIドキュメント投入スクリプト", "group": "grp_iface", "x": 280,  "y": 380, "w": 220, "h": 56 },
+
+    { "id": "chat_ctrl",       "title": "chat_controller.py", "subtitle": "process() / capture / DB管理", "group": "grp_ctrl", "x": 548, "y": 210, "w": 220, "h": 56 },
+
+    { "id": "ctx_builder",     "title": "context_builder",    "subtitle": "build_messages() プロンプト構築", "group": "grp_core", "x": 845, "y": 80,  "w": 220, "h": 56 },
+    { "id": "memory_mgr",      "title": "memory_manager",     "subtitle": "SQLite: history / memory",   "group": "grp_core", "x": 845,  "y": 172, "w": 220, "h": 56 },
+    { "id": "rag_mgr",         "title": "rag_manager",        "subtitle": "chunk / embed / search",     "group": "grp_core", "x": 845,  "y": 284, "w": 220, "h": 56 },
+    { "id": "llm_client",      "title": "llm_client.LLMClient","subtitle": "chat() / retry / timeout",  "group": "grp_core", "x": 845,  "y": 396, "w": 220, "h": 56 },
+    { "id": "db_registry",     "title": "db_registry",        "subtitle": "salt+SHA256 パスワード管理",  "group": "grp_core", "x": 845,  "y": 508, "w": 220, "h": 56 },
+    { "id": "notion_client",   "title": "notion_client",      "subtitle": "search / get_page_text / PDF", "group": "grp_core", "x": 845, "y": 614, "w": 220, "h": 56 },
+    { "id": "rag_sync",        "title": "notion_rag_sync",    "subtitle": "needs_sync / mark_synced",   "group": "grp_core", "x": 845,  "y": 710, "w": 220, "h": 56 },
+
+    { "id": "sqlite_db",       "title": "SQLite DB",          "subtitle": "memory.sqlite (messages + memory_entries)", "group": "grp_store", "x": 1155, "y": 172, "w": 220, "h": 56 },
+    { "id": "vector_db",       "title": "ChromaDB / JSON",    "subtitle": "vector_db/ or vector_db.json", "group": "grp_store", "x": 1155, "y": 284, "w": 220, "h": 56 },
+    { "id": "lm_studio",       "title": "LM Studio API",      "subtitle": "/v1/chat/completions  /v1/embeddings", "group": "grp_store", "x": 1155, "y": 396, "w": 220, "h": 56 },
+    { "id": "notion_api_ext",  "title": "Notion API",         "subtitle": "notion.so — search / blocks", "group": "grp_store", "x": 1155, "y": 614, "w": 220, "h": 56 }
+  ],
+  "flows": [
+    {
+      "id": "flow_discord_chat",
+      "icon": "💬",
+      "name": "1. Discordチャット（標準）",
+      "sub": "メンション or !chat コマンド",
+      "description": "Discord ユーザーのメンション・コマンドを受け取り、メモリと会話履歴を組み合わせて LM Studio に問い合わせ、返信する基本フロー。",
+      "steps": [
+        { "from": "discord_user",  "to": "discord_bot",  "passes": "メンション / !chat text", "note": "on_message または cmd_chat" },
+        { "from": "discord_bot",   "to": "chat_ctrl",    "passes": "process(message, session_id='discord-{ch}', db_name)", "note": "_session(channel.id)" },
+        { "from": "chat_ctrl",     "to": "ctx_builder",  "passes": "build_messages(db_name, session_id, user_input)", "note": "notion.enabled=false パス" },
+        { "from": "ctx_builder",   "to": "memory_mgr",   "passes": "get_history(limit=20) + find_relevant_memories(query, limit=5)", "note": "CJKバイグラムで関連記憶を絞り込む" },
+        { "from": "memory_mgr",    "to": "sqlite_db",    "passes": "SELECT messages WHERE session_id / SELECT memory_entries", "note": "" },
+        { "from": "chat_ctrl",     "to": "llm_client",   "passes": "messages=[system, memories, history, user]", "note": "" },
+        { "from": "llm_client",    "to": "lm_studio",    "passes": "POST /v1/chat/completions {model, messages}", "note": "httpx AsyncClient + retry" },
+        { "from": "chat_ctrl",     "to": "memory_mgr",   "passes": "save_message(user) + save_message(assistant)", "note": "会話を永続化" },
+        { "from": "discord_bot",   "to": "discord_user", "passes": "message.reply(reply_text)", "note": "typing() 表示付き" }
+      ]
+    },
+    {
+      "id": "flow_rag_chat",
+      "icon": "🔍",
+      "name": "2. RAGチャット",
+      "sub": "ドキュメント検索 + LLM回答",
+      "description": "rag.enabled=true のDBでチャットした場合。ユーザー入力をベクトル化して類似チャンクを検索し、知識としてプロンプトに注入する。",
+      "steps": [
+        { "from": "discord_user",  "to": "discord_bot",  "passes": "チャットメッセージ (RAG有効DBを使用中)", "note": "" },
+        { "from": "discord_bot",   "to": "chat_ctrl",    "passes": "process(message, session, db)", "note": "" },
+        { "from": "chat_ctrl",     "to": "ctx_builder",  "passes": "build_messages() — RAGパス", "note": "rag_enabled=true ブランチ" },
+        { "from": "ctx_builder",   "to": "rag_mgr",      "passes": "search(db, user_input, k=4, score_threshold=0.3)", "note": "" },
+        { "from": "rag_mgr",       "to": "lm_studio",    "passes": "POST /v1/embeddings {model:'bge-m3', input=[query]}", "note": "クエリをベクトル化" },
+        { "from": "rag_mgr",       "to": "vector_db",    "passes": "query_embeddings → cosine distance n_results=k", "note": "ChromaDB or JSON ブルートフォース" },
+        { "from": "ctx_builder",   "to": "memory_mgr",   "passes": "get_history() + find_relevant_memories()", "note": "" },
+        { "from": "chat_ctrl",     "to": "llm_client",   "passes": "messages=[system+RAG_CONSTRAINT, rag_docs, memories, history, user]", "note": "RAGドキュメントをメモリより優先" },
+        { "from": "llm_client",    "to": "lm_studio",    "passes": "POST /v1/chat/completions", "note": "" }
+      ]
+    },
+    {
+      "id": "flow_notion_chat",
+      "icon": "📖",
+      "name": "3. Notion連携チャット（2ステージLLM）",
+      "sub": "検索クエリ生成 → Notion検索 → RAG統合 → 最終回答",
+      "description": "notion.enabled=true の DB でチャット。LLM①がキーワードを抽出し Notion を検索。PDF添付ページは RAG に自動同期。LLM①が RAG+Notion を統合サマリー化し、LLM②が最終回答を生成する。",
+      "steps": [
+        { "from": "discord_bot",    "to": "chat_ctrl",      "passes": "process() — notion.enabled=true", "note": "_process_with_notion() に分岐" },
+        { "from": "chat_ctrl",      "to": "llm_client",     "passes": "_select_search_queries prompt (query_llm profile)", "note": "名詞・固有名詞のみ抽出、最大4件" },
+        { "from": "llm_client",     "to": "lm_studio",      "passes": "POST /v1/chat/completions {light_llm モデル}", "note": "軽量モデルで高速なキーワード抽出" },
+        { "from": "chat_ctrl",      "to": "notion_client",  "passes": "_search_notion_pages(queries, database_ids)", "note": "クエリごとに検索して重複排除" },
+        { "from": "notion_client",  "to": "notion_api_ext", "passes": "POST /v1/search {query, filter:{object:'page'}}", "note": "Notion Integration Token で認証" },
+        { "from": "chat_ctrl",      "to": "rag_sync",       "passes": "needs_sync(db, page_id, last_edited_time)", "note": "notion_sync.json で差分検出" },
+        { "from": "chat_ctrl",      "to": "rag_mgr",        "passes": "ingest_text(db, pdf_text, source='notion:{id}')", "note": "新規/更新ページのPDFのみ再投入" },
+        { "from": "chat_ctrl",      "to": "notion_client",  "passes": "get_page_text(page_id, api_key)", "note": "クエリ語を含むページのみ本文フェッチ" },
+        { "from": "chat_ctrl",      "to": "llm_client",     "passes": "LLM① _build_synthesis_messages(rag_docs, notion_results)", "note": "重複除去・矛盾注記付きサマリー生成" },
+        { "from": "chat_ctrl",      "to": "ctx_builder",    "passes": "build_messages_with_synthesized_info(db, session, msg, synthesized)", "note": "rawドキュメントの代わりにサマリーを注入" },
+        { "from": "chat_ctrl",      "to": "llm_client",     "passes": "LLM② final messages with synthesized context", "note": "最終ユーザー向け回答を生成" }
+      ]
+    },
+    {
+      "id": "flow_ingest_cli",
+      "icon": "📥",
+      "name": "4. CLIドキュメント投入",
+      "sub": "PDF/MD/TXT → チャンク → ベクトルDB",
+      "description": "管理者が scripts/ingest.py を使ってファイル・URLから文書を RAG インデックスに投入するフロー。チャンク分割 → 埋め込み → ChromaDB/JSON upsert。",
+      "steps": [
+        { "from": "cli_user",    "to": "ingest_cli", "passes": "--db general --file manual.pdf --source 'マニュアルv2'", "note": "txt/md/pdf/json に対応" },
+        { "from": "ingest_cli",  "to": "rag_mgr",    "passes": "ingest_text(db_name, text, source)", "note": "ingest_helpers.read_file でテキスト抽出" },
+        { "from": "rag_mgr",     "to": "lm_studio",  "passes": "POST /v1/embeddings {model:'bge-m3', input=[chunk1,chunk2,...]}", "note": "chunk_size=500, overlap=50でバッチ埋め込み" },
+        { "from": "rag_mgr",     "to": "vector_db",  "passes": "upsert(docs, embeddings, ids=SHA256[:16], metadatas={source,chunk_index})", "note": "ChromaDB PersistentClient or JSON" }
+      ]
+    },
+    {
+      "id": "flow_memory_capture",
+      "icon": "🧠",
+      "name": "5. メモリ自動キャプチャ",
+      "sub": "「覚えておいて」トリガー → LLM抽出 → SQLite保存",
+      "description": "「覚えておいて」等のフレーズを含むメッセージをバックグラウンドで検出。チャンネル履歴を LLM に渡して長期記憶を抽出・保存する。",
+      "steps": [
+        { "from": "discord_user", "to": "discord_bot",  "passes": "「覚えておいて」を含むメッセージ", "note": "_should_capture_memory() でトリガー検出" },
+        { "from": "discord_bot",  "to": "chat_ctrl",    "passes": "capture_memories_from_history(db, history_lines, author_id)", "note": "asyncio.create_task でバックグラウンド実行" },
+        { "from": "chat_ctrl",    "to": "memory_mgr",   "passes": "list_memories(db, limit=200) — 既存記憶リスト取得", "note": "重複抽出防止の既存セット構築" },
+        { "from": "chat_ctrl",    "to": "llm_client",   "passes": "_memory_extraction_messages(history_text, existing_memories)", "note": "最大40行/6000文字に切り詰め" },
+        { "from": "llm_client",   "to": "lm_studio",    "passes": "POST /v1/chat/completions → JSON [{content:...}, ...]", "note": "ルールベース記憶と LLM 抽出を統合" },
+        { "from": "chat_ctrl",    "to": "memory_mgr",   "passes": "save_memory(content, author_id, source='discord_auto') ×N件", "note": "正規化後 existing_set と照合してdedup" },
+        { "from": "memory_mgr",   "to": "sqlite_db",    "passes": "INSERT INTO memory_entries (content, author_id, source)", "note": "" }
+      ]
+    },
+    {
+      "id": "flow_db_create",
+      "icon": "🗄️",
+      "name": "6. DB作成（/db create）",
+      "sub": "新しい人格DBの作成とサーバー紐付け",
+      "description": "Discordサーバー管理者が /db create で新しい DB を作成し、salt+SHA256でパスワードをハッシュ化して登録。memory.sqlite テーブルを初期化する。",
+      "steps": [
+        { "from": "discord_user", "to": "discord_bot",  "passes": "/db create name:mydb password:secret123", "note": "Manage Guild 権限チェック" },
+        { "from": "discord_bot",  "to": "chat_ctrl",    "passes": "create_db(db_name, password, guild_id)", "note": "DB名: 3-32文字英数字/_/-" },
+        { "from": "chat_ctrl",    "to": "db_registry",  "passes": "register_db(name, password, guild_id)", "note": "salt=secrets.token_hex(16), hash=SHA256(salt:pwd)" },
+        { "from": "db_registry",  "to": "sqlite_db",    "passes": "discord_state.json に {guilds, db_credentials} を書き込み", "note": "guilds[guild_id].db_name を更新" },
+        { "from": "chat_ctrl",    "to": "memory_mgr",   "passes": "init_db(db_name) — CREATE TABLE messages / memory_entries + INDEX", "note": "SQLite 障害時は JSON フォールバック" }
+      ]
+    },
+    {
+      "id": "flow_memory_optimize",
+      "icon": "✨",
+      "name": "7. メモリ最適化（/memory optimize）",
+      "sub": "LLMで記憶を再構成・重複排除",
+      "description": "既存の長期記憶エントリをすべて LLM に渡し、分割・統合・重複排除した新しいリストで全件置き換える。",
+      "steps": [
+        { "from": "discord_user", "to": "discord_bot",  "passes": "/memory optimize", "note": "確認ボタン (_RefreshConfirmView) を表示" },
+        { "from": "discord_bot",  "to": "chat_ctrl",    "passes": "consolidate_memories(db_name, author_id)", "note": "confirm ボタン押下後" },
+        { "from": "chat_ctrl",    "to": "memory_mgr",   "passes": "get_all_memories(db_name)", "note": "" },
+        { "from": "memory_mgr",   "to": "sqlite_db",    "passes": "SELECT * FROM memory_entries ORDER BY id ASC", "note": "" },
+        { "from": "chat_ctrl",    "to": "llm_client",   "passes": "CONSOLIDATE_MEMORIES_PROMPT + '1. xxx\\n2. xxx...'", "note": "1エントリに複数事実→分割, 類似→統合" },
+        { "from": "llm_client",   "to": "lm_studio",    "passes": "POST /v1/chat/completions → JSON [\"memory1\", ...]", "note": "" },
+        { "from": "chat_ctrl",    "to": "memory_mgr",   "passes": "replace_all_memories(normalized, author_id, source='db_refresh')", "note": "DELETE + batch INSERT" }
+      ]
+    },
+    {
+      "id": "flow_http_chat",
+      "icon": "🌐",
+      "name": "8. HTTP APIチャット",
+      "sub": "POST /chat → reply JSON",
+      "description": "外部アプリや curl から HTTP API に POST /chat でメッセージを送り、同じ chat_controller.process() を通じて回答を得る。X-API-Key 認証付き。",
+      "steps": [
+        { "from": "http_client",  "to": "http_api",     "passes": "POST /chat {message, session_id, db_name, user_id}", "note": "X-API-Key ヘッダ認証 (未設定で全許可)" },
+        { "from": "http_api",     "to": "chat_ctrl",    "passes": "process(message, session_id, db_name)", "note": "DB存在チェック → 502/504 エラー変換" },
+        { "from": "chat_ctrl",    "to": "ctx_builder",  "passes": "build_messages()", "note": "" },
+        { "from": "chat_ctrl",    "to": "llm_client",   "passes": "messages list", "note": "" },
+        { "from": "llm_client",   "to": "lm_studio",    "passes": "POST /v1/chat/completions", "note": "" },
+        { "from": "chat_ctrl",    "to": "memory_mgr",   "passes": "save_message(user + assistant)", "note": "" },
+        { "from": "http_api",     "to": "http_client",  "passes": "{reply, db_used, session_id}", "note": "ChatResponse Pydanticモデル" }
+      ]
+    },
+    {
+      "id": "flow_slack_chat",
+      "icon": "💼",
+      "name": "9. Slackチャット",
+      "sub": "@mention / /pai コマンド",
+      "description": "Slack の Socket Mode で受信したメンションや /pai コマンドを処理。チャンネルごとに独立した DB を持てる。",
+      "steps": [
+        { "from": "slack_user",   "to": "slack_bot",    "passes": "@ボット名 メッセージ or /pai メッセージ", "note": "Socket Mode (SLACK_APP_TOKEN)" },
+        { "from": "slack_bot",    "to": "chat_ctrl",    "passes": "process(text, session='slack-{channel}', _db(channel))", "note": "_channel_db で per-channel DB管理" },
+        { "from": "chat_ctrl",    "to": "ctx_builder",  "passes": "build_messages()", "note": "" },
+        { "from": "chat_ctrl",    "to": "llm_client",   "passes": "messages list", "note": "" },
+        { "from": "llm_client",   "to": "lm_studio",    "passes": "POST /v1/chat/completions", "note": "" },
+        { "from": "slack_bot",    "to": "slack_user",   "passes": "say(reply, thread_ts=event.ts)", "note": "スレッド内に返信" }
+      ]
+    }
+  ]
+}
+
+</script>
+
+<script>
+(async () => {
+'use strict';
+
+/* ── Data loading ─────────────────────────────────────────────── */
+let DATA;
+try {
+  const r = await fetch('./flows.json');
+  if (!r.ok) throw new Error(r.status);
+  DATA = await r.json();
+} catch {
+  DATA = JSON.parse(document.getElementById('workflow-data').textContent.trim());
+}
+
+const nodeMap = {};
+for (const n of DATA.nodes) nodeMap[n.id] = n;
+const groupMap = {};
+for (const g of DATA.groups) groupMap[g.id] = g;
+
+/* ── State ────────────────────────────────────────────────────── */
+let activeFlowId = null;
+let focusedStep = null;   // { flowId, stepIdx, edgeKey }
+let badgeCycleMap = {};   // edgeKey -> current cycle index
+let vpX = 0, vpY = 0, vpW = DATA.viewBox.w, vpH = DATA.viewBox.h;
+let panStart = null;
+
+/* ── SVG helpers ─────────────────────────────────────────────── */
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs = {}) {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  return e;
+}
+function hel(tag, attrs = {}) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) e[k] = v;
+  return e;
+}
+
+const svgEl       = document.getElementById('main-svg');
+const defsEl      = document.getElementById('svg-defs');
+const colLayer    = document.getElementById('col-layer');
+const edgeLayer   = document.getElementById('edge-layer');
+const nodeLayer   = document.getElementById('node-layer');
+const badgeLayer  = document.getElementById('badge-layer');
+const tooltip     = document.getElementById('tooltip');
+const annoList    = document.getElementById('anno-list');
+const annoTitle   = document.getElementById('anno-title');
+const sidebar     = document.getElementById('flow-list');
+const legendEl    = document.getElementById('legend');
+
+/* ── Apply initial viewBox ────────────────────────────────────── */
+function applyVP() {
+  svgEl.setAttribute('viewBox', `${vpX} ${vpY} ${vpW} ${vpH}`);
+}
+applyVP();
+
+/* ── Build SVG defs ───────────────────────────────────────────── */
+function buildDefs() {
+  // Normal arrow marker
+  const mBase = el('marker', { id:'arrow-base', markerWidth:'8', markerHeight:'8',
+    refX:'6', refY:'3', orient:'auto' });
+  const pBase = el('path', { d:'M0,0 L0,6 L8,3 z', fill:'var(--edge)' });
+  mBase.appendChild(pBase); defsEl.appendChild(mBase);
+
+  // Active arrow marker
+  const mAct = el('marker', { id:'arrow-active', markerWidth:'8', markerHeight:'8',
+    refX:'6', refY:'3', orient:'auto' });
+  const pAct = el('path', { d:'M0,0 L0,6 L8,3 z', fill:'var(--edge-active)' });
+  mAct.appendChild(pAct); defsEl.appendChild(mAct);
+
+  // Node drop shadow filter
+  const flt = el('filter', { id:'node-shadow', x:'-20%', y:'-20%', width:'140%', height:'140%' });
+  const feD = el('feDropShadow', { dx:'0', dy:'1', stdDeviation:'3',
+    'flood-color':'rgba(0,0,0,.6)', 'flood-opacity':'1' });
+  flt.appendChild(feD); defsEl.appendChild(flt);
+}
+buildDefs();
+
+/* ── Render columns ───────────────────────────────────────────── */
+function renderColumns() {
+  const vbH = DATA.viewBox.h;
+  for (const col of DATA.columns) {
+    // header label
+    const t = el('text', { x: col.x, y: 36, 'text-anchor':'middle', class:'col-label' });
+    t.textContent = col.label;
+    colLayer.appendChild(t);
+    // divider line
+    if (col.divider < DATA.viewBox.w) {
+      const ln = el('line', { x1: col.divider, y1: 50, x2: col.divider, y2: vbH,
+        class:'col-divider', 'stroke-width':'1' });
+      colLayer.appendChild(ln);
+    }
+  }
+}
+renderColumns();
+
+/* ── Render nodes ─────────────────────────────────────────────── */
+const nodeElMap = {}; // id -> { g, rect, t1, t2 }
+function renderNodes() {
+  for (const n of DATA.nodes) {
+    const grp = groupMap[n.group] || { stroke:'#555', fill:'#1a1a1a' };
+    const g = el('g', { class:'node-g', 'data-id': n.id });
+    const rect = el('rect', {
+      x: n.x, y: n.y, width: n.w, height: n.h, rx: 8,
+      fill: grp.fill, stroke: grp.stroke, 'stroke-width':'1.5',
+      filter:'url(#node-shadow)', class:'node-rect'
+    });
+    const t1 = el('text', {
+      x: n.x + 10, y: n.y + n.h * .42,
+      class:'node-text-title', 'dominant-baseline':'middle'
+    });
+    t1.textContent = n.title;
+    const t2 = el('text', {
+      x: n.x + 10, y: n.y + n.h * .72,
+      class:'node-text-sub', 'dominant-baseline':'middle'
+    });
+    t2.textContent = n.subtitle;
+    g.appendChild(rect); g.appendChild(t1); g.appendChild(t2);
+    nodeLayer.appendChild(g);
+    nodeElMap[n.id] = { g, rect, t1, t2 };
+  }
+}
+renderNodes();
+
+/* ── Legend ──────────────────────────────────────────────────── */
+function buildLegend() {
+  for (const grp of DATA.groups) {
+    const row = document.createElement('div');
+    row.className = 'legend-row';
+    const dot = document.createElement('div');
+    dot.className = 'legend-dot';
+    dot.style.background = grp.fill;
+    dot.style.border = `2px solid ${grp.stroke}`;
+    row.appendChild(dot);
+    const lbl = document.createElement('span');
+    lbl.textContent = grp.label;
+    row.appendChild(lbl);
+    legendEl.appendChild(row);
+  }
+}
+buildLegend();
+
+/* ── Sidebar flow buttons ─────────────────────────────────────── */
+function buildSidebar() {
+  for (let i = 0; i < DATA.flows.length; i++) {
+    const fl = DATA.flows[i];
+    const btn = document.createElement('button');
+    btn.className = 'flow-btn';
+    btn.dataset.flowId = fl.id;
+    btn.innerHTML = `<span class="icon">${fl.icon}</span>
+      <span><div class="label">${fl.name}</div><div class="sub">${fl.sub}</div></span>`;
+    btn.addEventListener('click', () => toggleFlow(fl.id));
+    sidebar.appendChild(btn);
+  }
+}
+buildSidebar();
+
+/* ── Edge geometry helpers ────────────────────────────────────── */
+function nodeCx(n) { return n.x + n.w / 2; }
+function nodeCy(n) { return n.y + n.h / 2; }
+
+function getEndpoints(from, to) {
+  const fcx = nodeCx(from), fcy = nodeCy(from);
+  const tcx = nodeCx(to),   tcy = nodeCy(to);
+  const sameCol = Math.abs(fcx - tcx) < 80;
+  if (sameCol) {
+    if (fcy < tcy) return { sx: fcx, sy: from.y + from.h, ex: tcx, ey: to.y, vert: true };
+    return { sx: fcx, sy: from.y, ex: tcx, ey: to.y + to.h, vert: true };
+  }
+  if (fcx < tcx) return { sx: from.x + from.w, sy: fcy, ex: to.x, ey: tcy, vert: false };
+  return { sx: from.x, sy: fcy, ex: to.x + to.w, ey: tcy, vert: false };
+}
+
+function buildPath(ep, lane) {
+  const { sx, sy, ex, ey, vert } = ep;
+  const lo = lane || 0;
+  if (vert) {
+    const my = (sy + ey) / 2;
+    return `M${sx},${sy} C${sx + lo},${my} ${ex + lo},${my} ${ex},${ey}`;
+  }
+  const mx = (sx + ex) / 2;
+  return `M${sx},${sy} C${mx},${sy + lo} ${mx},${ey + lo} ${ex},${ey}`;
+}
+
+/* ── Detect reciprocal pairs → lane assignment ────────────────── */
+function getLane(fromId, toId, allSteps) {
+  const LANE = 38;
+  const rev = allSteps.some(s => s.from === toId && s.to === fromId);
+  if (!rev) return 0;
+  return fromId < toId ? +LANE : -LANE;
+}
+
+/* ── Edge & badge rendering ───────────────────────────────────── */
+const edgePathMap = {};    // edgeKey -> <path> element
+const badgeElMap = {};     // edgeKey -> { g, pill, text, halo }
+let placedBadges = [];     // { x, y, w, h } for collision avoidance
+
+const T_OFFSETS = [0.50,0.44,0.56,0.38,0.62,0.32,0.68,0.26,0.74,0.20,0.80,0.15,0.85,0.10,0.90];
+
+function ptOnPath(pathEl, t) {
+  const len = pathEl.getTotalLength();
+  return pathEl.getPointAtLength(t * len);
+}
+
+function ellipseDist(ax, ay, bx, by, nw, nh) {
+  const dx = (ax - bx) / nw, dy = (ay - by) / nh;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function insideBbox(px, py, n, margin) {
+  return px >= n.x - margin && px <= n.x + n.w + margin &&
+         py >= n.y - margin && py <= n.y + n.h + margin;
+}
+
+function scorePlacement(px, py, pillW, pillH) {
+  let score = 0;
+  const normW = pillW * .6 + 20, normH = pillH * .6 + 20;
+  for (const b of placedBadges) {
+    const d = ellipseDist(px, py, b.cx, b.cy, normW, normH);
+    if (d < 1.05) score -= (1.05 - d) * 2.5;
+  }
+  for (const n of DATA.nodes) {
+    if (insideBbox(px, py, n, 4)) score -= 3.5;
+  }
+  return score;
+}
+
+function bestT(pathEl, pillW, pillH) {
+  let best = { t: 0.5, score: -Infinity, pt: null };
+  for (const t of T_OFFSETS) {
+    const pt = ptOnPath(pathEl, t);
+    const s = scorePlacement(pt.x, pt.y, pillW, pillH);
+    if (s > best.score) { best = { t, score: s, pt }; }
+  }
+  // Escape if still inside a node
+  if (DATA.nodes.some(n => insideBbox(best.pt.x, best.pt.y, n, 2))) {
+    const len = pathEl.getTotalLength();
+    const STEP = 6;
+    for (let d = STEP; d < len * .4; d += STEP) {
+      for (const dir of [1, -1]) {
+        const tt = best.t + dir * d / len;
+        if (tt < 0 || tt > 1) continue;
+        const pt = pathEl.getPointAtLength(tt * len);
+        if (!DATA.nodes.some(n => insideBbox(pt.x, pt.y, n, 2))) {
+          best.pt = pt; best.t = tt; break;
+        }
+      }
+      if (!DATA.nodes.some(n => insideBbox(best.pt.x, best.pt.y, n, 2))) break;
+    }
+  }
+  return best;
+}
+
+function edgeKey(from, to) { return `${from}→${to}`; }
+
+function makeBadgeLabel(stepNums) {
+  if (!stepNums.length) return '';
+  if (stepNums.length === 1) return String(stepNums[0]);
+  if (stepNums.length <= 5) return stepNums.join(' · ');
+  return `${stepNums[0]}–${stepNums[stepNums.length-1]} (${stepNums.length})`;
+}
+
+function renderEdges(flow) {
+  edgeLayer.innerHTML = '';
+  badgeLayer.innerHTML = '';
+  Object.keys(edgePathMap).forEach(k => delete edgePathMap[k]);
+  Object.keys(badgeElMap).forEach(k => delete badgeElMap[k]);
+  placedBadges = [];
+
+  if (!flow) return;
+
+  const steps = flow.steps;
+
+  // Group steps by edge
+  const edgeSteps = {};  // edgeKey -> [stepIdx]
+  for (let i = 0; i < steps.length; i++) {
+    const k = edgeKey(steps[i].from, steps[i].to);
+    (edgeSteps[k] = edgeSteps[k] || []).push(i + 1);  // 1-indexed
+  }
+
+  // Draw paths first (edge-layer), badges later (badge-layer)
+  const pathEls = {};
+  for (const [k, stepNums] of Object.entries(edgeSteps)) {
+    const [fromId, toId] = k.split('→');
+    const fromN = nodeMap[fromId], toN = nodeMap[toId];
+    if (!fromN || !toN) continue;
+    const ep = getEndpoints(fromN, toN);
+    const lane = getLane(fromId, toId, steps);
+    const d = buildPath(ep, lane);
+    const pathEl = el('path', {
+      d, class:'edge-path', 'data-edge':k,
+      'marker-end':'url(#arrow-base)'
+    });
+    edgeLayer.appendChild(pathEl);
+    edgePathMap[k] = pathEl;
+    pathEls[k] = { pathEl, stepNums };
+  }
+
+  // Sort: multi-step edges first (they need midpoint priority)
+  const sortedEdges = Object.entries(pathEls)
+    .sort((a, b) => b[1].stepNums.length - a[1].stepNums.length);
+
+  for (const [k, { pathEl, stepNums }] of sortedEdges) {
+    const [fromId, toId] = k.split('→');
+    const label = makeBadgeLabel(stepNums);
+    if (!label) continue;
+
+    // Measure text width
+    const pillH = 18, pillPadX = 8;
+    const estW = label.length * 6.5 + pillPadX * 2;
+    const pillW = Math.max(estW, 22);
+    const rx = pillH / 2;
+
+    const best = bestT(pathEl, pillW, pillH);
+    const { pt } = best;
+    const cx = pt.x, cy = pt.y;
+
+    // Tether if far from midpoint
+    const mp = ptOnPath(pathEl, 0.5);
+    const dist = Math.hypot(cx - mp.x, cy - mp.y);
+
+    const g = el('g', { class:'edge-step-badge', 'data-edge':k, transform:`translate(${cx},${cy})` });
+
+    // Tether
+    if (dist > 28) {
+      const tether = el('path', {
+        d:`M0,0 L${mp.x - cx},${mp.y - cy}`, class:'badge-tether'
+      });
+      badgeLayer.appendChild(tether);
+    }
+
+    // Halo
+    const halo = el('ellipse', {
+      cx:'0', cy:'0',
+      rx: pillW * .55, ry: pillH * .55,
+      class:'edge-step-halo'
+    });
+    g.appendChild(halo);
+
+    // Transparent hit area
+    const hit = el('rect', {
+      x: -pillW/2 - 8, y: -pillH/2 - 8,
+      width: pillW + 16, height: pillH + 16,
+      fill:'rgba(0,0,0,0.001)', 'pointer-events':'all', rx:'4'
+    });
+    g.appendChild(hit);
+
+    // Scale group for pulse
+    const scaleG = el('g', { class:'edge-step-scale' });
+    const pill = el('rect', {
+      x: -pillW/2, y: -pillH/2, width: pillW, height: pillH,
+      rx, class:'edge-step-pill'
+    });
+    const txt = el('text', {
+      x:'0', y:'0', 'text-anchor':'middle', 'dominant-baseline':'middle',
+      class:'edge-step-text'
+    });
+    txt.textContent = label;
+    scaleG.appendChild(pill); scaleG.appendChild(txt);
+    g.appendChild(scaleG);
+
+    badgeLayer.appendChild(g);
+    badgeElMap[k] = { g, pill, txt, halo, stepNums, cx, cy };
+    placedBadges.push({ cx, cy, w: pillW, h: pillH });
+
+    // Events — use mouseover/mouseout
+    g.addEventListener('mouseover', (ev) => {
+      if (!ev.currentTarget.contains(ev.relatedTarget)) {
+        showTooltip(ev, k, flow, stepNums);
+        g.classList.add('hovered');
+      }
+    });
+    g.addEventListener('mouseout', (ev) => {
+      if (!g.contains(ev.relatedTarget)) {
+        hideTooltip();
+        g.classList.remove('hovered');
+      }
+    });
+    g.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      cycleFocusOnEdge(k, flow, stepNums);
+    });
+  }
+}
+
+/* ── Focus system ─────────────────────────────────────────────── */
+function clearFocus() {
+  focusedStep = null;
+  // Remove focus classes
+  for (const [k, b] of Object.entries(badgeElMap)) {
+    b.g.classList.remove('focused');
+  }
+  for (const [k, p] of Object.entries(edgePathMap)) {
+    p.classList.remove('focused-edge');
+    p.setAttribute('marker-end', 'url(#arrow-active)');
+  }
+  document.querySelectorAll('#anno-list li').forEach(li => {
+    li.classList.remove('focused');
+  });
+  // Re-dim if flow active
+  if (activeFlowId) applyFlowDim(DATA.flows.find(f => f.id === activeFlowId));
+}
+
+function cycleFocusOnEdge(k, flow, stepNums) {
+  if (!badgeCycleMap[k]) badgeCycleMap[k] = 0;
+
+  if (focusedStep && focusedStep.edgeKey === k) {
+    badgeCycleMap[k] = (badgeCycleMap[k] + 1) % stepNums.length;
+  } else {
+    badgeCycleMap[k] = 0;
+  }
+  const cycleIdx = badgeCycleMap[k];
+  const globalStepIdx = stepNums[cycleIdx] - 1;  // 0-indexed
+
+  applyFocus(k, flow.id, globalStepIdx, flow);
+}
+
+function applyFocus(k, flowId, stepIdx, flow) {
+  clearFocus();
+  focusedStep = { edgeKey: k, flowId, stepIdx };
+
+  // Badge pulse
+  const badge = badgeElMap[k];
+  if (badge) badge.g.classList.add('focused');
+
+  // Edge glow
+  const path = edgePathMap[k];
+  if (path) {
+    path.classList.add('focused-edge');
+    path.setAttribute('marker-end', 'url(#arrow-active)');
+  }
+
+  // Endpoint nodes glow
+  const [fromId, toId] = k.split('→');
+  const fromEl = nodeElMap[fromId], toEl = nodeElMap[toId];
+  if (fromEl) fromEl.rect.style.animation = 'node-glow 1.1s ease-in-out infinite';
+  if (toEl)   toEl.rect.style.animation   = 'node-glow 1.1s ease-in-out infinite';
+
+  // Annotation flash
+  const lis = annoList.querySelectorAll('li');
+  lis.forEach((li, i) => {
+    li.classList.remove('focused');
+  });
+  const targetLi = lis[stepIdx];
+  if (targetLi) {
+    targetLi.classList.remove('focused');
+    void targetLi.offsetWidth; // force reflow
+    targetLi.classList.add('focused');
+    targetLi.style.animation = 'none';
+    void targetLi.offsetWidth;
+    targetLi.style.animation = 'anno-flash 1.2s ease-out forwards';
+    targetLi.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  // Pan to edge midpoint
+  if (path) {
+    const mp = ptOnPath(path, 0.5);
+    panToPoint(mp.x, mp.y);
+  }
+}
+
+function panToPoint(wx, wy) {
+  const canvas = document.getElementById('canvas');
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  const scaleX = vpW / cw, scaleY = vpH / ch;
+  const scale = Math.max(scaleX, scaleY);
+  // Center the point
+  vpX = wx - (cw * scale) / 2;
+  vpY = wy - (ch * scale) / 2;
+  applyVP();
+}
+
+/* ── Flow dim/highlight ───────────────────────────────────────── */
+function applyFlowDim(flow) {
+  if (!flow) {
+    // Reset all
+    for (const [id, ne] of Object.entries(nodeElMap)) {
+      ne.rect.classList.remove('dim');
+      ne.rect.style.stroke = '';
+      ne.rect.style.strokeWidth = '';
+      ne.rect.style.animation = '';
+    }
+    for (const [k, pe] of Object.entries(edgePathMap)) {
+      pe.classList.remove('active','dim');
+      pe.setAttribute('marker-end','url(#arrow-base)');
+    }
+    return;
+  }
+  const steps = flow.steps;
+  const inFlowNodes = new Set();
+  const inFlowEdges = new Set();
+  for (const s of steps) {
+    inFlowNodes.add(s.from); inFlowNodes.add(s.to);
+    inFlowEdges.add(edgeKey(s.from, s.to));
+  }
+
+  for (const [id, ne] of Object.entries(nodeElMap)) {
+    ne.rect.style.animation = '';
+    if (inFlowNodes.has(id)) {
+      ne.rect.classList.remove('dim');
+      const grp = groupMap[nodeMap[id].group];
+      ne.rect.style.stroke = grp ? grp.stroke : '';
+      ne.rect.style.strokeWidth = '2.5px';
+    } else {
+      ne.rect.classList.add('dim');
+      ne.rect.style.stroke = '';
+      ne.rect.style.strokeWidth = '';
+    }
+  }
+  for (const [k, pe] of Object.entries(edgePathMap)) {
+    if (inFlowEdges.has(k)) {
+      pe.classList.remove('dim');
+      pe.classList.add('active');
+      pe.setAttribute('marker-end','url(#arrow-active)');
+    } else {
+      pe.classList.add('dim');
+      pe.classList.remove('active');
+    }
+  }
+}
+
+/* ── Flow toggle ──────────────────────────────────────────────── */
+function toggleFlow(flowId) {
+  badgeCycleMap = {};
+  if (activeFlowId === flowId) {
+    activeFlowId = null;
+    focusedStep = null;
+    renderEdges(null);
+    applyFlowDim(null);
+    buildAnnotations(null);
+    document.querySelectorAll('.flow-btn').forEach(b => b.classList.remove('active'));
+    annoTitle.textContent = 'フローを選択してください';
+    return;
+  }
+  activeFlowId = flowId;
+  const flow = DATA.flows.find(f => f.id === flowId);
+  renderEdges(flow);
+  applyFlowDim(flow);
+  buildAnnotations(flow);
+  document.querySelectorAll('.flow-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.flowId === flowId);
+  });
+  annoTitle.textContent = `${flow.icon} ${flow.name}`;
+  fitFlow(flow);
+}
+
+/* ── Annotations ──────────────────────────────────────────────── */
+function buildAnnotations(flow) {
+  annoList.innerHTML = '';
+  if (!flow) return;
+  flow.steps.forEach((step, i) => {
+    const li = document.createElement('li');
+    const body = document.createElement('div');
+    body.className = 'anno-body';
+    const route = document.createElement('span');
+    route.className = 'anno-route';
+    route.textContent = step.from;
+    const arr = document.createElement('span');
+    arr.className = 'anno-arrow';
+    arr.textContent = ' → ';
+    const to = document.createElement('span');
+    to.className = 'anno-route';
+    to.textContent = step.to;
+    route.appendChild(arr); route.appendChild(to);
+    body.appendChild(route);
+    if (step.passes) {
+      const passes = document.createElement('span');
+      passes.className = 'anno-passes';
+      passes.textContent = step.passes;
+      body.appendChild(passes);
+    }
+    if (step.note) {
+      const note = document.createElement('span');
+      note.className = 'anno-note';
+      note.textContent = step.note;
+      body.appendChild(note);
+    }
+    li.appendChild(body);
+    li.addEventListener('click', () => {
+      const k = edgeKey(step.from, step.to);
+      applyFocus(k, flow.id, i, flow);
+    });
+    annoList.appendChild(li);
+  });
+}
+
+/* ── Tooltip ──────────────────────────────────────────────────── */
+function showTooltip(ev, k, flow, stepNums) {
+  if (!flow) return;
+  const steps = flow.steps;
+  const [fromId, toId] = k.split('→');
+  const fromN = nodeMap[fromId], toN = nodeMap[toId];
+
+  let html = `<div class="tt-title">${flow.icon} ${flow.name}</div>`;
+  html += `<div class="tt-route">${fromN ? fromN.title : fromId}`;
+  html += ` <span style="color:var(--edge-active)">→</span> `;
+  html += `${toN ? toN.title : toId}</div>`;
+
+  for (const num of stepNums) {
+    const s = steps[num - 1];
+    if (!s) continue;
+    html += `<div class="tt-step">`;
+    html += `<strong style="color:var(--text);font-size:11px">Step ${num}</strong>`;
+    if (s.passes) html += `<span class="tt-passes">${escHtml(s.passes)}</span>`;
+    if (s.note)   html += `<span class="tt-note">${escHtml(s.note)}</span>`;
+    html += `</div>`;
+  }
+  tooltip.innerHTML = html;
+  moveTooltip(ev);
+  tooltip.classList.add('visible');
+}
+function hideTooltip() { tooltip.classList.remove('visible'); }
+function moveTooltip(ev) {
+  let x = ev.clientX + 16, y = ev.clientY + 16;
+  const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+  if (x + tw > window.innerWidth - 8)  x = ev.clientX - tw - 8;
+  if (y + th > window.innerHeight - 8) y = ev.clientY - th - 8;
+  tooltip.style.left = x + 'px';
+  tooltip.style.top  = y + 'px';
+}
+document.addEventListener('mousemove', (ev) => {
+  if (tooltip.classList.contains('visible')) moveTooltip(ev);
+});
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+/* ── Pan & Zoom ───────────────────────────────────────────────── */
+const canvasEl = document.getElementById('canvas');
+canvasEl.addEventListener('wheel', (ev) => {
+  ev.preventDefault();
+  const rect = canvasEl.getBoundingClientRect();
+  const mx = (ev.clientX - rect.left) / rect.width;
+  const my = (ev.clientY - rect.top)  / rect.height;
+  const factor = ev.deltaY > 0 ? 1.12 : 0.89;
+  const pivotX = vpX + mx * vpW;
+  const pivotY = vpY + my * vpH;
+  vpW *= factor; vpH *= factor;
+  vpX = pivotX - mx * vpW;
+  vpY = pivotY - my * vpH;
+  applyVP();
+}, { passive: false });
+
+canvasEl.addEventListener('mousedown', (ev) => {
+  if (ev.target.closest('.edge-step-badge')) return;
+  panStart = { x: ev.clientX, y: ev.clientY, vx: vpX, vy: vpY };
+  canvasEl.classList.add('panning');
+});
+document.addEventListener('mousemove', (ev) => {
+  if (!panStart) return;
+  const dx = (ev.clientX - panStart.x) / canvasEl.clientWidth  * vpW;
+  const dy = (ev.clientY - panStart.y) / canvasEl.clientHeight * vpH;
+  vpX = panStart.vx - dx;
+  vpY = panStart.vy - dy;
+  applyVP();
+});
+document.addEventListener('mouseup', () => {
+  panStart = null;
+  canvasEl.classList.remove('panning');
+});
+
+/* ── Fit flow to canvas ───────────────────────────────────────── */
+function fitFlow(flow) {
+  if (!flow) { resetView(); return; }
+  const nodeIds = new Set();
+  for (const s of flow.steps) { nodeIds.add(s.from); nodeIds.add(s.to); }
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const id of nodeIds) {
+    const n = nodeMap[id];
+    if (!n) continue;
+    minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
+    maxX = Math.max(maxX, n.x + n.w); maxY = Math.max(maxY, n.y + n.h);
+  }
+  const PAD = 80;
+  minX -= PAD; minY -= PAD; maxX += PAD; maxY += PAD;
+  const canvas = document.getElementById('canvas');
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  const fw = maxX - minX, fh = maxY - minY;
+  const scale = Math.max(fw / cw, fh / ch);
+  vpW = cw * scale; vpH = ch * scale;
+  vpX = minX + (fw - vpW) / 2;
+  vpY = minY + (fh - vpH) / 2;
+  applyVP();
+}
+
+function resetView() {
+  const canvas = document.getElementById('canvas');
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  const scaleX = DATA.viewBox.w / cw, scaleY = DATA.viewBox.h / ch;
+  const scale = Math.max(scaleX, scaleY);
+  vpW = cw * scale; vpH = ch * scale;
+  vpX = (DATA.viewBox.w - vpW) / 2;
+  vpY = (DATA.viewBox.h - vpH) / 2;
+  applyVP();
+}
+document.getElementById('reset-btn').addEventListener('click', () => {
+  activeFlowId = null;
+  focusedStep = null;
+  renderEdges(null);
+  applyFlowDim(null);
+  buildAnnotations(null);
+  document.querySelectorAll('.flow-btn').forEach(b => b.classList.remove('active'));
+  annoTitle.textContent = 'フローを選択してください';
+  resetView();
+});
+
+/* ── Keyboard ─────────────────────────────────────────────────── */
+document.addEventListener('keydown', (ev) => {
+  const tag = document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  const key = ev.key.toLowerCase();
+
+  if (key === 'escape') {
+    if (focusedStep) {
+      clearFocus();
+    } else if (activeFlowId) {
+      activeFlowId = null;
+      focusedStep = null;
+      renderEdges(null);
+      applyFlowDim(null);
+      buildAnnotations(null);
+      document.querySelectorAll('.flow-btn').forEach(b => b.classList.remove('active'));
+      annoTitle.textContent = 'フローを選択してください';
+    }
+    return;
+  }
+  if (key === 'f') { resetView(); return; }
+  if (key === '+' || key === '=') {
+    vpW *= 0.85; vpH *= 0.85;
+    vpX += vpW * 0.075; vpY += vpH * 0.075;
+    applyVP(); return;
+  }
+  if (key === '-') {
+    vpX -= vpW * 0.075; vpY -= vpH * 0.075;
+    vpW /= 0.85; vpH /= 0.85;
+    applyVP(); return;
+  }
+  // 1-9, 0
+  const num = ev.key === '0' ? 10 : parseInt(ev.key);
+  if (!isNaN(num) && num >= 1 && num <= DATA.flows.length) {
+    toggleFlow(DATA.flows[num - 1].id);
+  }
+});
+
+/* ── Resizer ──────────────────────────────────────────────────── */
+(function() {
+  const rz = document.getElementById('resizer');
+  let rzStart = null;
+  const MIN_H = 80, MAX_H = 600;
+  const saved = localStorage.getItem('nocord-anno-h');
+  if (saved) document.documentElement.style.setProperty('--anno-h', saved + 'px');
+
+  rz.addEventListener('mousedown', (ev) => {
+    ev.preventDefault();
+    const cur = parseInt(getComputedStyle(document.documentElement)
+      .getPropertyValue('--anno-h')) || 300;
+    rzStart = { y: ev.clientY, h: cur };
+    rz.classList.add('dragging');
+  });
+  document.addEventListener('mousemove', (ev) => {
+    if (!rzStart) return;
+    const dy = rzStart.y - ev.clientY;
+    const nh = Math.max(MIN_H, Math.min(MAX_H, rzStart.h + dy));
+    document.documentElement.style.setProperty('--anno-h', nh + 'px');
+    // Update grid
+    document.getElementById('app').style.gridTemplateRows =
+      `auto 1fr 6px ${nh}px`;
+  });
+  document.addEventListener('mouseup', () => {
+    if (rzStart) {
+      const cur = parseInt(getComputedStyle(document.documentElement)
+        .getPropertyValue('--anno-h')) || 300;
+      localStorage.setItem('nocord-anno-h', cur);
+      rzStart = null;
+    }
+    rz.classList.remove('dragging');
+  });
+})();
+
+/* ── Initial render ───────────────────────────────────────────── */
+resetView();
+
+})();
+</script>
+</body>
+</html>

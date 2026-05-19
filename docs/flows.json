@@ -1,0 +1,191 @@
+{
+  "viewBox": { "w": 1500, "h": 900 },
+  "columns": [
+    { "id": "col_ext",   "label": "EXTERNAL",       "x": 110,  "divider": 235  },
+    { "id": "col_iface", "label": "INTERFACES",      "x": 390,  "divider": 520  },
+    { "id": "col_ctrl",  "label": "CONTROLLER",      "x": 660,  "divider": 790  },
+    { "id": "col_core",  "label": "CORE SERVICES",   "x": 965,  "divider": 1095 },
+    { "id": "col_store", "label": "STORAGE / LLM",   "x": 1280, "divider": 1480 }
+  ],
+  "groups": [
+    { "id": "grp_ext",   "label": "外部",           "stroke": "#6c757d", "fill": "#161a1d", "sub": "#4a5060" },
+    { "id": "grp_iface", "label": "インターフェース", "stroke": "#4cc9f0", "fill": "#0b2330", "sub": "#2a8ca8" },
+    { "id": "grp_ctrl",  "label": "コントローラー",   "stroke": "#f77f00", "fill": "#2a1500", "sub": "#b05c00" },
+    { "id": "grp_core",  "label": "コアサービス",     "stroke": "#c77dff", "fill": "#1a0a2e", "sub": "#8855cc" },
+    { "id": "grp_store", "label": "ストレージ/LLM",   "stroke": "#52b788", "fill": "#0a1f14", "sub": "#348055" }
+  ],
+  "nodes": [
+    { "id": "discord_user",    "title": "Discord User",       "subtitle": "ユーザー / サーバー管理者",    "group": "grp_ext",   "x": 10,   "y": 80,  "w": 200, "h": 56 },
+    { "id": "slack_user",      "title": "Slack User",         "subtitle": "ワークスペースメンバー",       "group": "grp_ext",   "x": 10,   "y": 172, "w": 200, "h": 56 },
+    { "id": "http_client",     "title": "HTTP Client",        "subtitle": "外部アプリ / curl",           "group": "grp_ext",   "x": 10,   "y": 264, "w": 200, "h": 56 },
+    { "id": "cli_user",        "title": "CLI / Admin",        "subtitle": "python scripts/ingest.py",   "group": "grp_ext",   "x": 10,   "y": 380, "w": 200, "h": 56 },
+
+    { "id": "discord_bot",     "title": "discord_bot.py",     "subtitle": "discord.py Bot + Slash",     "group": "grp_iface", "x": 280,  "y": 80,  "w": 220, "h": 56 },
+    { "id": "slack_bot",       "title": "slack_bot.py",       "subtitle": "Bolt AsyncApp + Socket",     "group": "grp_iface", "x": 280,  "y": 172, "w": 220, "h": 56 },
+    { "id": "http_api",        "title": "http_api.py",        "subtitle": "FastAPI / uvicorn",          "group": "grp_iface", "x": 280,  "y": 264, "w": 220, "h": 56 },
+    { "id": "ingest_cli",      "title": "scripts/ingest.py",  "subtitle": "CLIドキュメント投入スクリプト", "group": "grp_iface", "x": 280,  "y": 380, "w": 220, "h": 56 },
+
+    { "id": "chat_ctrl",       "title": "chat_controller.py", "subtitle": "process() / capture / DB管理", "group": "grp_ctrl", "x": 548, "y": 210, "w": 220, "h": 56 },
+
+    { "id": "ctx_builder",     "title": "context_builder",    "subtitle": "build_messages() プロンプト構築", "group": "grp_core", "x": 845, "y": 80,  "w": 220, "h": 56 },
+    { "id": "memory_mgr",      "title": "memory_manager",     "subtitle": "SQLite: history / memory",   "group": "grp_core", "x": 845,  "y": 172, "w": 220, "h": 56 },
+    { "id": "rag_mgr",         "title": "rag_manager",        "subtitle": "chunk / embed / search",     "group": "grp_core", "x": 845,  "y": 284, "w": 220, "h": 56 },
+    { "id": "llm_client",      "title": "llm_client.LLMClient","subtitle": "chat() / retry / timeout",  "group": "grp_core", "x": 845,  "y": 396, "w": 220, "h": 56 },
+    { "id": "db_registry",     "title": "db_registry",        "subtitle": "salt+SHA256 パスワード管理",  "group": "grp_core", "x": 845,  "y": 508, "w": 220, "h": 56 },
+    { "id": "notion_client",   "title": "notion_client",      "subtitle": "search / get_page_text / PDF", "group": "grp_core", "x": 845, "y": 614, "w": 220, "h": 56 },
+    { "id": "rag_sync",        "title": "notion_rag_sync",    "subtitle": "needs_sync / mark_synced",   "group": "grp_core", "x": 845,  "y": 710, "w": 220, "h": 56 },
+
+    { "id": "sqlite_db",       "title": "SQLite DB",          "subtitle": "memory.sqlite (messages + memory_entries)", "group": "grp_store", "x": 1155, "y": 172, "w": 220, "h": 56 },
+    { "id": "vector_db",       "title": "ChromaDB / JSON",    "subtitle": "vector_db/ or vector_db.json", "group": "grp_store", "x": 1155, "y": 284, "w": 220, "h": 56 },
+    { "id": "lm_studio",       "title": "LM Studio API",      "subtitle": "/v1/chat/completions  /v1/embeddings", "group": "grp_store", "x": 1155, "y": 396, "w": 220, "h": 56 },
+    { "id": "notion_api_ext",  "title": "Notion API",         "subtitle": "notion.so — search / blocks", "group": "grp_store", "x": 1155, "y": 614, "w": 220, "h": 56 }
+  ],
+  "flows": [
+    {
+      "id": "flow_discord_chat",
+      "icon": "💬",
+      "name": "1. Discordチャット（標準）",
+      "sub": "メンション or !chat コマンド",
+      "description": "Discord ユーザーのメンション・コマンドを受け取り、メモリと会話履歴を組み合わせて LM Studio に問い合わせ、返信する基本フロー。",
+      "steps": [
+        { "from": "discord_user",  "to": "discord_bot",  "passes": "メンション / !chat text", "note": "on_message または cmd_chat" },
+        { "from": "discord_bot",   "to": "chat_ctrl",    "passes": "process(message, session_id='discord-{ch}', db_name)", "note": "_session(channel.id)" },
+        { "from": "chat_ctrl",     "to": "ctx_builder",  "passes": "build_messages(db_name, session_id, user_input)", "note": "notion.enabled=false パス" },
+        { "from": "ctx_builder",   "to": "memory_mgr",   "passes": "get_history(limit=20) + find_relevant_memories(query, limit=5)", "note": "CJKバイグラムで関連記憶を絞り込む" },
+        { "from": "memory_mgr",    "to": "sqlite_db",    "passes": "SELECT messages WHERE session_id / SELECT memory_entries", "note": "" },
+        { "from": "chat_ctrl",     "to": "llm_client",   "passes": "messages=[system, memories, history, user]", "note": "" },
+        { "from": "llm_client",    "to": "lm_studio",    "passes": "POST /v1/chat/completions {model, messages}", "note": "httpx AsyncClient + retry" },
+        { "from": "chat_ctrl",     "to": "memory_mgr",   "passes": "save_message(user) + save_message(assistant)", "note": "会話を永続化" },
+        { "from": "discord_bot",   "to": "discord_user", "passes": "message.reply(reply_text)", "note": "typing() 表示付き" }
+      ]
+    },
+    {
+      "id": "flow_rag_chat",
+      "icon": "🔍",
+      "name": "2. RAGチャット",
+      "sub": "ドキュメント検索 + LLM回答",
+      "description": "rag.enabled=true のDBでチャットした場合。ユーザー入力をベクトル化して類似チャンクを検索し、知識としてプロンプトに注入する。",
+      "steps": [
+        { "from": "discord_user",  "to": "discord_bot",  "passes": "チャットメッセージ (RAG有効DBを使用中)", "note": "" },
+        { "from": "discord_bot",   "to": "chat_ctrl",    "passes": "process(message, session, db)", "note": "" },
+        { "from": "chat_ctrl",     "to": "ctx_builder",  "passes": "build_messages() — RAGパス", "note": "rag_enabled=true ブランチ" },
+        { "from": "ctx_builder",   "to": "rag_mgr",      "passes": "search(db, user_input, k=4, score_threshold=0.3)", "note": "" },
+        { "from": "rag_mgr",       "to": "lm_studio",    "passes": "POST /v1/embeddings {model:'bge-m3', input=[query]}", "note": "クエリをベクトル化" },
+        { "from": "rag_mgr",       "to": "vector_db",    "passes": "query_embeddings → cosine distance n_results=k", "note": "ChromaDB or JSON ブルートフォース" },
+        { "from": "ctx_builder",   "to": "memory_mgr",   "passes": "get_history() + find_relevant_memories()", "note": "" },
+        { "from": "chat_ctrl",     "to": "llm_client",   "passes": "messages=[system+RAG_CONSTRAINT, rag_docs, memories, history, user]", "note": "RAGドキュメントをメモリより優先" },
+        { "from": "llm_client",    "to": "lm_studio",    "passes": "POST /v1/chat/completions", "note": "" }
+      ]
+    },
+    {
+      "id": "flow_notion_chat",
+      "icon": "📖",
+      "name": "3. Notion連携チャット（2ステージLLM）",
+      "sub": "検索クエリ生成 → Notion検索 → RAG統合 → 最終回答",
+      "description": "notion.enabled=true の DB でチャット。LLM①がキーワードを抽出し Notion を検索。PDF添付ページは RAG に自動同期。LLM①が RAG+Notion を統合サマリー化し、LLM②が最終回答を生成する。",
+      "steps": [
+        { "from": "discord_bot",    "to": "chat_ctrl",      "passes": "process() — notion.enabled=true", "note": "_process_with_notion() に分岐" },
+        { "from": "chat_ctrl",      "to": "llm_client",     "passes": "_select_search_queries prompt (query_llm profile)", "note": "名詞・固有名詞のみ抽出、最大4件" },
+        { "from": "llm_client",     "to": "lm_studio",      "passes": "POST /v1/chat/completions {light_llm モデル}", "note": "軽量モデルで高速なキーワード抽出" },
+        { "from": "chat_ctrl",      "to": "notion_client",  "passes": "_search_notion_pages(queries, database_ids)", "note": "クエリごとに検索して重複排除" },
+        { "from": "notion_client",  "to": "notion_api_ext", "passes": "POST /v1/search {query, filter:{object:'page'}}", "note": "Notion Integration Token で認証" },
+        { "from": "chat_ctrl",      "to": "rag_sync",       "passes": "needs_sync(db, page_id, last_edited_time)", "note": "notion_sync.json で差分検出" },
+        { "from": "chat_ctrl",      "to": "rag_mgr",        "passes": "ingest_text(db, pdf_text, source='notion:{id}')", "note": "新規/更新ページのPDFのみ再投入" },
+        { "from": "chat_ctrl",      "to": "notion_client",  "passes": "get_page_text(page_id, api_key)", "note": "クエリ語を含むページのみ本文フェッチ" },
+        { "from": "chat_ctrl",      "to": "llm_client",     "passes": "LLM① _build_synthesis_messages(rag_docs, notion_results)", "note": "重複除去・矛盾注記付きサマリー生成" },
+        { "from": "chat_ctrl",      "to": "ctx_builder",    "passes": "build_messages_with_synthesized_info(db, session, msg, synthesized)", "note": "rawドキュメントの代わりにサマリーを注入" },
+        { "from": "chat_ctrl",      "to": "llm_client",     "passes": "LLM② final messages with synthesized context", "note": "最終ユーザー向け回答を生成" }
+      ]
+    },
+    {
+      "id": "flow_ingest_cli",
+      "icon": "📥",
+      "name": "4. CLIドキュメント投入",
+      "sub": "PDF/MD/TXT → チャンク → ベクトルDB",
+      "description": "管理者が scripts/ingest.py を使ってファイル・URLから文書を RAG インデックスに投入するフロー。チャンク分割 → 埋め込み → ChromaDB/JSON upsert。",
+      "steps": [
+        { "from": "cli_user",    "to": "ingest_cli", "passes": "--db general --file manual.pdf --source 'マニュアルv2'", "note": "txt/md/pdf/json に対応" },
+        { "from": "ingest_cli",  "to": "rag_mgr",    "passes": "ingest_text(db_name, text, source)", "note": "ingest_helpers.read_file でテキスト抽出" },
+        { "from": "rag_mgr",     "to": "lm_studio",  "passes": "POST /v1/embeddings {model:'bge-m3', input=[chunk1,chunk2,...]}", "note": "chunk_size=500, overlap=50でバッチ埋め込み" },
+        { "from": "rag_mgr",     "to": "vector_db",  "passes": "upsert(docs, embeddings, ids=SHA256[:16], metadatas={source,chunk_index})", "note": "ChromaDB PersistentClient or JSON" }
+      ]
+    },
+    {
+      "id": "flow_memory_capture",
+      "icon": "🧠",
+      "name": "5. メモリ自動キャプチャ",
+      "sub": "「覚えておいて」トリガー → LLM抽出 → SQLite保存",
+      "description": "「覚えておいて」等のフレーズを含むメッセージをバックグラウンドで検出。チャンネル履歴を LLM に渡して長期記憶を抽出・保存する。",
+      "steps": [
+        { "from": "discord_user", "to": "discord_bot",  "passes": "「覚えておいて」を含むメッセージ", "note": "_should_capture_memory() でトリガー検出" },
+        { "from": "discord_bot",  "to": "chat_ctrl",    "passes": "capture_memories_from_history(db, history_lines, author_id)", "note": "asyncio.create_task でバックグラウンド実行" },
+        { "from": "chat_ctrl",    "to": "memory_mgr",   "passes": "list_memories(db, limit=200) — 既存記憶リスト取得", "note": "重複抽出防止の既存セット構築" },
+        { "from": "chat_ctrl",    "to": "llm_client",   "passes": "_memory_extraction_messages(history_text, existing_memories)", "note": "最大40行/6000文字に切り詰め" },
+        { "from": "llm_client",   "to": "lm_studio",    "passes": "POST /v1/chat/completions → JSON [{content:...}, ...]", "note": "ルールベース記憶と LLM 抽出を統合" },
+        { "from": "chat_ctrl",    "to": "memory_mgr",   "passes": "save_memory(content, author_id, source='discord_auto') ×N件", "note": "正規化後 existing_set と照合してdedup" },
+        { "from": "memory_mgr",   "to": "sqlite_db",    "passes": "INSERT INTO memory_entries (content, author_id, source)", "note": "" }
+      ]
+    },
+    {
+      "id": "flow_db_create",
+      "icon": "🗄️",
+      "name": "6. DB作成（/db create）",
+      "sub": "新しい人格DBの作成とサーバー紐付け",
+      "description": "Discordサーバー管理者が /db create で新しい DB を作成し、salt+SHA256でパスワードをハッシュ化して登録。memory.sqlite テーブルを初期化する。",
+      "steps": [
+        { "from": "discord_user", "to": "discord_bot",  "passes": "/db create name:mydb password:secret123", "note": "Manage Guild 権限チェック" },
+        { "from": "discord_bot",  "to": "chat_ctrl",    "passes": "create_db(db_name, password, guild_id)", "note": "DB名: 3-32文字英数字/_/-" },
+        { "from": "chat_ctrl",    "to": "db_registry",  "passes": "register_db(name, password, guild_id)", "note": "salt=secrets.token_hex(16), hash=SHA256(salt:pwd)" },
+        { "from": "db_registry",  "to": "sqlite_db",    "passes": "discord_state.json に {guilds, db_credentials} を書き込み", "note": "guilds[guild_id].db_name を更新" },
+        { "from": "chat_ctrl",    "to": "memory_mgr",   "passes": "init_db(db_name) — CREATE TABLE messages / memory_entries + INDEX", "note": "SQLite 障害時は JSON フォールバック" }
+      ]
+    },
+    {
+      "id": "flow_memory_optimize",
+      "icon": "✨",
+      "name": "7. メモリ最適化（/memory optimize）",
+      "sub": "LLMで記憶を再構成・重複排除",
+      "description": "既存の長期記憶エントリをすべて LLM に渡し、分割・統合・重複排除した新しいリストで全件置き換える。",
+      "steps": [
+        { "from": "discord_user", "to": "discord_bot",  "passes": "/memory optimize", "note": "確認ボタン (_RefreshConfirmView) を表示" },
+        { "from": "discord_bot",  "to": "chat_ctrl",    "passes": "consolidate_memories(db_name, author_id)", "note": "confirm ボタン押下後" },
+        { "from": "chat_ctrl",    "to": "memory_mgr",   "passes": "get_all_memories(db_name)", "note": "" },
+        { "from": "memory_mgr",   "to": "sqlite_db",    "passes": "SELECT * FROM memory_entries ORDER BY id ASC", "note": "" },
+        { "from": "chat_ctrl",    "to": "llm_client",   "passes": "CONSOLIDATE_MEMORIES_PROMPT + '1. xxx\\n2. xxx...'", "note": "1エントリに複数事実→分割, 類似→統合" },
+        { "from": "llm_client",   "to": "lm_studio",    "passes": "POST /v1/chat/completions → JSON [\"memory1\", ...]", "note": "" },
+        { "from": "chat_ctrl",    "to": "memory_mgr",   "passes": "replace_all_memories(normalized, author_id, source='db_refresh')", "note": "DELETE + batch INSERT" }
+      ]
+    },
+    {
+      "id": "flow_http_chat",
+      "icon": "🌐",
+      "name": "8. HTTP APIチャット",
+      "sub": "POST /chat → reply JSON",
+      "description": "外部アプリや curl から HTTP API に POST /chat でメッセージを送り、同じ chat_controller.process() を通じて回答を得る。X-API-Key 認証付き。",
+      "steps": [
+        { "from": "http_client",  "to": "http_api",     "passes": "POST /chat {message, session_id, db_name, user_id}", "note": "X-API-Key ヘッダ認証 (未設定で全許可)" },
+        { "from": "http_api",     "to": "chat_ctrl",    "passes": "process(message, session_id, db_name)", "note": "DB存在チェック → 502/504 エラー変換" },
+        { "from": "chat_ctrl",    "to": "ctx_builder",  "passes": "build_messages()", "note": "" },
+        { "from": "chat_ctrl",    "to": "llm_client",   "passes": "messages list", "note": "" },
+        { "from": "llm_client",   "to": "lm_studio",    "passes": "POST /v1/chat/completions", "note": "" },
+        { "from": "chat_ctrl",    "to": "memory_mgr",   "passes": "save_message(user + assistant)", "note": "" },
+        { "from": "http_api",     "to": "http_client",  "passes": "{reply, db_used, session_id}", "note": "ChatResponse Pydanticモデル" }
+      ]
+    },
+    {
+      "id": "flow_slack_chat",
+      "icon": "💼",
+      "name": "9. Slackチャット",
+      "sub": "@mention / /pai コマンド",
+      "description": "Slack の Socket Mode で受信したメンションや /pai コマンドを処理。チャンネルごとに独立した DB を持てる。",
+      "steps": [
+        { "from": "slack_user",   "to": "slack_bot",    "passes": "@ボット名 メッセージ or /pai メッセージ", "note": "Socket Mode (SLACK_APP_TOKEN)" },
+        { "from": "slack_bot",    "to": "chat_ctrl",    "passes": "process(text, session='slack-{channel}', _db(channel))", "note": "_channel_db で per-channel DB管理" },
+        { "from": "chat_ctrl",    "to": "ctx_builder",  "passes": "build_messages()", "note": "" },
+        { "from": "chat_ctrl",    "to": "llm_client",   "passes": "messages list", "note": "" },
+        { "from": "llm_client",   "to": "lm_studio",    "passes": "POST /v1/chat/completions", "note": "" },
+        { "from": "slack_bot",    "to": "slack_user",   "passes": "say(reply, thread_ts=event.ts)", "note": "スレッド内に返信" }
+      ]
+    }
+  ]
+}
