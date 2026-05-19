@@ -15,6 +15,7 @@ LM Studio の OpenAI 互換 API をバックエンドに、RAG（検索拡張生
 6. [Slack コマンド一覧](#6-slack-コマンド一覧)
 7. [HTTP API](#7-http-api)
 8. [設定ファイル](#8-設定ファイル)
+9. [Discord Bot の招待設定](#9-discord-bot-の招待設定)
 
 ---
 
@@ -298,3 +299,41 @@ LM Studio を使う場合は `provider: "openai"` を指定します。
   }
 }
 ```
+
+---
+
+## 9. Discord Bot の招待設定
+
+### OAuth2 スコープ
+
+[Discord Developer Portal](https://discord.com/developers/applications) → アプリ → **OAuth2 → URL Generator** で以下を選択します。
+
+| スコープ | 理由 |
+|---|---|
+| `bot` | Bot をサーバーに参加させる |
+| `applications.commands` | スラッシュコマンド（`/chat`, `/db`, `/memory` 等）を登録する |
+
+### Bot 権限
+
+| 権限 | 理由 |
+|---|---|
+| View Channels | チャンネルのメッセージを読む |
+| Send Messages | 返答を送信する |
+| Embed Links | ステータス表示などの Embed を送る |
+| Read Message History | 会話コンテキストを取得する |
+
+パーミッション整数: **`84992`**
+
+### Privileged Gateway Intents（要手動有効化）
+
+Developer Portal → アプリ → **Bot** ページで以下を ON にします。
+
+- **Message Content Intent** — メンション時のメッセージ本文を読むために必須
+
+### 招待 URL テンプレート
+
+```
+https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=84992&scope=bot%20applications.commands
+```
+
+`YOUR_CLIENT_ID` を Developer Portal の **Application ID** に置き換えてください。
