@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile interfaces/discord_bot.py)",
+      "Bash(python -m py_compile core/chat_controller.py)"
+    ]
+  }
+}

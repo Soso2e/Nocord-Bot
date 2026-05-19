@@ -1,5 +1,7 @@
 import json
+import inspect
 import re
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from core.context_builder import build_messages, list_available_dbs
@@ -18,6 +20,8 @@ from core.memory_manager import (
 )
 
 _llm = LLMClient()
+_query_llm = LLMClient(profile="query_llm")
+ProgressCallback = Callable[[str], Awaitable[None] | None]
 _DB_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{3,32}$")
 _MEMORY_JSON_RE = re.compile(r"\[[\s\S]*\]")
 _HISTORY_LINE_RE = re.compile(r"^\[(?P<user_id>\d+)\|(?P<name>[^\]]+)\]:\s*(?P<content>.+)$")
@@ -27,6 +31,9 @@ _SELF_NAME_PATTERNS = [
 ]
 _MEMORY_CAPTURE_MAX_LINES = 40
 _MEMORY_CAPTURE_MAX_CHARS = 6000
+_NOTION_ASCII_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{1,}")
+_NOTION_QUOTED_RE = re.compile(r"[「『\"']([^」』\"']{2,})[」』\"']")
+_JSON_ARRAY_RE = re.compile(r"\[[\s\S]*\]")
 
 
 def _db_dir(db_name: str) -> Path:
@@ -44,6 +51,17 @@ def _default_db_config(db_name: str) -> dict:
         },
         "allowed_tools": ["save_memory"],
     }
+
+
+async def _emit_progress(progress: ProgressCallback | None, message: str) -> None:
+    if progress is None:
+        return
+    try:
+        result = progress(message)
+        if inspect.isawaitable(result):
+            await result
+    except Exception as exc:
+        print(f"[Progress] Callback failed: {exc}")
 
 
 def _memory_extraction_messages(history_text: str, existing_memories: list[str] | None = None) -> list[dict]:
@@ -199,12 +217,208 @@ def _build_synthesis_messages(
     ]
 
 
+def _build_notion_search_queries(message: str, max_queries: int = 4) -> list[str]:
+    """Build robust Notion search queries from natural chat text.
+
+    Notion search is sensitive to query wording. A page that matches "cad" may not
+    match "cadについて何か情報ある", so chat requests should try the original text
+    plus compact keyword candidates.
+    """
+    queries: list[str] = []
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", value).strip(" 　?？!！。、「」『』\"'")
+        if cleaned and cleaned.lower() not in {q.lower() for q in queries}:
+            queries.append(cleaned)
+
+    add(message)
+
+    for match in _NOTION_QUOTED_RE.finditer(message):
+        add(match.group(1))
+
+    for token in _NOTION_ASCII_TOKEN_RE.findall(message):
+        add(token)
+
+    return queries[:max_queries]
+
+
+def _parse_search_query_json(raw_text: str) -> list[str]:
+    text = raw_text.strip()
+    data = None
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        match = _JSON_ARRAY_RE.search(text)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                data = None
+
+    queries: list[str] = []
+    if isinstance(data, list):
+        values = data
+    elif isinstance(data, dict):
+        values = data.get("queries", [])
+    else:
+        values = []
+
+    for item in values:
+        value = str(item).strip() if item is not None else ""
+        if value and value.lower() not in {q.lower() for q in queries}:
+            queries.append(value)
+    return queries
+
+
+def _expand_search_queries(queries: list[str], max_queries: int = 4) -> list[str]:
+    expanded: list[str] = []
+
+    def add(value: str) -> None:
+        cleaned = re.sub(r"\s+", " ", value).strip(" 　?？!！。、「」『』\"'")
+        if cleaned and cleaned.lower() not in {q.lower() for q in expanded}:
+            expanded.append(cleaned)
+
+    for query in queries:
+        ascii_tokens = _NOTION_ASCII_TOKEN_RE.findall(query)
+        for token in ascii_tokens:
+            add(token)
+        add(query)
+
+    return expanded[:max_queries]
+
+
+async def _select_search_queries(message: str, max_queries: int = 4) -> list[str]:
+    prompt = (
+        "あなたはNotion/RAG検索用の検索語を選定する係です。\n"
+        "ユーザー発話から、実際に検索すべき名詞・固有名詞・略語だけを抽出してください。\n"
+        "助詞や依頼表現（について、教えて、情報ある、調べて等）は除外します。\n"
+        "英字略語は原文の表記を優先し、必要なら日本語表記も追加します。\n"
+        "返答はJSON配列のみ。例: [\"CAD\"]\n"
+        "最大4件。検索語が不明なら [] を返してください。"
+    )
+    try:
+        raw = await _query_llm.chat([
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": message},
+        ])
+        queries = _parse_search_query_json(raw)
+    except Exception as exc:
+        print(f"[SearchQuery] LLM query selection failed: {exc}")
+        queries = []
+    if not queries:
+        queries = _build_notion_search_queries(message, max_queries=max_queries)
+    return _expand_search_queries(queries, max_queries=max_queries)
+
+
+def _text_contains_any_query(text: str, queries: list[str]) -> bool:
+    haystack = text.casefold()
+    return any(query.casefold() in haystack for query in queries if query.strip())
+
+
+async def _search_notion_pages(
+    queries: list[str],
+    database_ids: list[str],
+    api_key: str,
+    max_results: int,
+    errors: list[str] | None = None,
+) -> list[dict]:
+    from core import notion_client
+
+    pages: list[dict] = []
+    seen_ids: set[str] = set()
+
+    for query in queries:
+        if len(pages) >= max_results:
+            break
+        try:
+            found = await notion_client.search_pages(
+                query,
+                database_ids,
+                api_key,
+                max_results,
+            )
+        except Exception as exc:
+            error = f"{query}: {exc}"
+            if errors is not None:
+                errors.append(error)
+            print(f"[Notion] Search failed for query '{query}': {exc}")
+            continue
+
+        for page in found:
+            page_id = page.get("id", "")
+            if page_id and page_id not in seen_ids:
+                seen_ids.add(page_id)
+                pages.append(page)
+                if len(pages) >= max_results:
+                    break
+
+    return pages
+
+
+def _format_notion_page_ref(page: dict) -> str:
+    from core import notion_client
+
+    title = notion_client.get_page_title(page) or "Untitled"
+    page_id = page.get("id", "")
+    url = page.get("url") or (f"https://www.notion.so/{page_id.replace('-', '')}" if page_id else "")
+    if url:
+        return f"[{title}]({url})"
+    return f"{title} (`{page_id}`)"
+
+
+def _format_notion_found_message(pages: list[dict]) -> str:
+    if not pages:
+        return "Notionで該当ページは見つかりませんでした"
+
+    refs = [_format_notion_page_ref(page) for page in pages[:3]]
+    suffix = f" ほか{len(pages) - 3}件" if len(pages) > 3 else ""
+    return "Notionで該当ページを発見: " + " / ".join(refs) + suffix
+
+
+def _format_notion_results_found_message(notion_results: list[dict]) -> str:
+    if not notion_results:
+        return "Notionで該当ページは見つかりませんでした"
+
+    refs: list[str] = []
+    for result in notion_results[:3]:
+        title = result.get("title") or "Untitled"
+        url = result.get("url", "")
+        page_id = result.get("id", "")
+        if url:
+            refs.append(f"[{title}]({url})")
+        elif page_id:
+            refs.append(f"{title} (`{page_id}`)")
+        else:
+            refs.append(title)
+    suffix = f" ほか{len(notion_results) - 3}件" if len(notion_results) > 3 else ""
+    return "Notionで該当ページを発見: " + " / ".join(refs) + suffix
+
+
+def _format_notion_references(notion_results: list[dict]) -> str:
+    refs: list[str] = []
+    seen: set[str] = set()
+    for result in notion_results:
+        title = result.get("title") or "Untitled"
+        url = result.get("url", "")
+        page_id = result.get("id", "")
+        key = url or page_id or title
+        if key in seen:
+            continue
+        seen.add(key)
+        if url:
+            refs.append(f"- [{title}]({url})")
+        elif page_id:
+            refs.append(f"- {title} (`{page_id}`)")
+    return "\n".join(refs)
+
+
 async def _process_with_notion(
     message: str,
     session_id: str,
     db_name: str,
     cfg: dict,
     notion_cfg: dict,
+    progress: ProgressCallback | None = None,
 ) -> str:
     """2-stage LLM flow: LLM① synthesizes RAG+Notion info, LLM② generates the reply."""
     from core import notion_client, notion_rag_sync
@@ -212,6 +426,7 @@ async def _process_with_notion(
     from core.rag_manager import delete_by_source, ingest_text
     from core.rag_manager import search as rag_search
 
+    await _emit_progress(progress, "Notion連携を確認中...")
     api_key = notion_client.get_api_key(notion_cfg)
     if not api_key:
         raise ValueError("Notion API key not configured (set notion.api_key in DB config or NOTION_API_KEY env var)")
@@ -220,14 +435,17 @@ async def _process_with_notion(
     pdf_property: str = notion_cfg.get("pdf_property", "PDF")
     max_results: int = notion_cfg.get("max_results", 5)
 
-    # Search Notion
-    notion_pages: list[dict] = []
-    try:
-        notion_pages = await notion_client.search_pages(
-            message, database_ids, api_key, max_results
-        )
-    except Exception as exc:
-        print(f"[Notion] Search failed: {exc}")
+    await _emit_progress(progress, "検索語を選定中...")
+    search_queries = await _select_search_queries(message)
+    if search_queries:
+        await _emit_progress(progress, "検索語: " + " / ".join(search_queries))
+    else:
+        await _emit_progress(progress, "検索語を選定できませんでした")
+
+    await _emit_progress(progress, "Notionを検索中...")
+    notion_pages = await _search_notion_pages(search_queries, database_ids, api_key, max_results)
+    if notion_pages:
+        await _emit_progress(progress, f"Notion候補を{len(notion_pages)}件取得")
 
     # Sync PDFs to RAG for new/updated pages
     for page in notion_pages:
@@ -251,10 +469,12 @@ async def _process_with_notion(
     rag_docs: list[dict] = []
     rag_cfg = cfg.get("rag", {})
     if rag_cfg.get("enabled", False):
+        await _emit_progress(progress, "RAGを検索中...")
         try:
+            rag_query = search_queries[0] if search_queries else message
             rag_docs = rag_search(
                 db_name,
-                message,
+                rag_query,
                 k=rag_cfg.get("retrieval_k", 4),
                 score_threshold=rag_cfg.get("score_threshold", 0.3),
             )
@@ -267,15 +487,27 @@ async def _process_with_notion(
         try:
             title = notion_client.get_page_title(page)
             text = await notion_client.get_page_text(page["id"], api_key)
-            page_url = page.get("url", "")
-            if title or text:
-                notion_results.append({"title": title, "text": text, "url": page_url})
+            searchable_text = f"{title}\n{text}"
+            if (title or text) and _text_contains_any_query(searchable_text, search_queries):
+                notion_results.append({
+                    "id": page.get("id", ""),
+                    "title": title,
+                    "url": page.get("url", ""),
+                    "text": text,
+                })
         except Exception as exc:
             print(f"[Notion] Page text fetch failed for {page.get('id', '')}: {exc}")
 
+    if notion_pages and not notion_results:
+        await _emit_progress(progress, "Notion候補はありましたが、検索語を含むページ本文/タイトルに限定すると0件でした")
+    else:
+        await _emit_progress(progress, _format_notion_results_found_message(notion_results))
+
     # No external info found — fall back to the normal single-stage flow
     if not rag_docs and not notion_results:
+        await _emit_progress(progress, "メモリを検索中...")
         messages = build_messages(db_name, session_id, message)
+        await _emit_progress(progress, "回答を生成中...")
         return await _llm.chat(messages)
 
     # LLM① — synthesize RAG + Notion into a compact information summary
@@ -283,20 +515,15 @@ async def _process_with_notion(
     synthesized = await _llm.chat(synthesis_msgs)
 
     # LLM② — generate the final user-facing reply
+    await _emit_progress(progress, "メモリを検索中...")
     final_messages = build_messages_with_synthesized_info(
         db_name, session_id, message, synthesized
     )
+    await _emit_progress(progress, "回答を生成中...")
     reply = await _llm.chat(final_messages)
-
-    # Append Notion source links if available
-    source_links = [
-        f"- [{r['title'] or 'Notionページ'}]({r['url']})"
-        for r in notion_results
-        if r.get("url")
-    ]
-    if source_links:
-        reply = reply + "\n\n**参考:**\n" + "\n".join(source_links)
-
+    references = _format_notion_references(notion_results)
+    if references:
+        reply = reply.rstrip() + "\n\n参照したNotionページ:\n" + references
     return reply
 
 
@@ -304,6 +531,7 @@ async def process(
     message: str,
     session_id: str,
     db_name: str = "general",
+    progress: ProgressCallback | None = None,
 ) -> str:
     init_db(db_name)
     cfg = _load_db_config(db_name)
@@ -311,13 +539,23 @@ async def process(
 
     if notion_cfg.get("enabled", False):
         try:
-            reply = await _process_with_notion(message, session_id, db_name, cfg, notion_cfg)
+            reply = await _process_with_notion(message, session_id, db_name, cfg, notion_cfg, progress)
         except Exception as exc:
             print(f"[Notion] Integration error, falling back to standard flow: {exc}")
+            await _emit_progress(progress, f"Notion検索をスキップ: {exc}")
+            if cfg.get("rag", {}).get("enabled", False):
+                await _emit_progress(progress, "RAGを検索中...")
+            await _emit_progress(progress, "メモリを検索中...")
             messages = build_messages(db_name, session_id, message)
+            await _emit_progress(progress, "回答を生成中...")
             reply = await _llm.chat(messages)
     else:
+        await _emit_progress(progress, "Notion検索をスキップ: Notion連携が無効です")
+        if cfg.get("rag", {}).get("enabled", False):
+            await _emit_progress(progress, "RAGを検索中...")
+        await _emit_progress(progress, "メモリを検索中...")
         messages = build_messages(db_name, session_id, message)
+        await _emit_progress(progress, "回答を生成中...")
         reply = await _llm.chat(messages)
 
     save_message(db_name, session_id, "user", message)
@@ -530,3 +768,84 @@ def rag_list_sources(db_name: str) -> list[str]:
 def memory_delete(db_name: str, memory_id: int) -> bool:
     """Delete a single memory entry by ID. Returns True if deleted."""
     return delete_memory(db_name, memory_id)
+
+
+def notion_enable(db_name: str, api_key: str) -> None:
+    cfg = _load_db_config(db_name)
+    cfg.setdefault("notion", {})["enabled"] = True
+    cfg["notion"]["api_key"] = api_key
+    _save_db_config(db_name, cfg)
+
+
+def notion_disable(db_name: str) -> None:
+    cfg = _load_db_config(db_name)
+    cfg.setdefault("notion", {})["enabled"] = False
+    _save_db_config(db_name, cfg)
+
+
+def notion_db_add(db_name: str, database_id: str) -> bool:
+    """Add a Notion database ID. Returns False if already registered."""
+    cfg = _load_db_config(db_name)
+    notion_cfg = cfg.setdefault("notion", {})
+    ids: list = notion_cfg.setdefault("database_ids", [])
+    normalized = database_id.strip()
+    if normalized in ids:
+        return False
+    ids.append(normalized)
+    _save_db_config(db_name, cfg)
+    return True
+
+
+def notion_db_remove(db_name: str, database_id: str) -> bool:
+    """Remove a Notion database ID. Returns False if not found."""
+    cfg = _load_db_config(db_name)
+    ids: list = cfg.get("notion", {}).get("database_ids", [])
+    if database_id not in ids:
+        return False
+    ids.remove(database_id)
+    _save_db_config(db_name, cfg)
+    return True
+
+
+def notion_get_status(db_name: str) -> dict:
+    """Return Notion config and connectivity info for the given DB."""
+    cfg = _load_db_config(db_name)
+    notion_cfg = cfg.get("notion", {})
+    from core import notion_client
+    api_key = notion_client.get_api_key(notion_cfg)
+    return {
+        "enabled": notion_cfg.get("enabled", False),
+        "has_api_key": bool(api_key),
+        "database_ids": notion_cfg.get("database_ids", []),
+        "pdf_property": notion_cfg.get("pdf_property", "PDF"),
+        "max_results": notion_cfg.get("max_results", 5),
+    }
+
+
+async def notion_test_search(db_name: str, query: str) -> dict:
+    """Run a test Notion search and return pages found (titles + page IDs).
+
+    Returns dict with keys: pages (list of {title, id}), error (str or None).
+    """
+    cfg = _load_db_config(db_name)
+    notion_cfg = cfg.get("notion", {})
+    from core import notion_client
+    api_key = notion_client.get_api_key(notion_cfg)
+    if not api_key:
+        return {"pages": [], "error": "APIキーが設定されていません"}
+
+    database_ids = notion_cfg.get("database_ids", [])
+    max_results = notion_cfg.get("max_results", 5)
+    errors: list[str] = []
+    queries = await _select_search_queries(query)
+    pages = await _search_notion_pages(queries, database_ids, api_key, max_results, errors)
+    if not pages and errors:
+        return {"pages": [], "error": "\n".join(errors)}
+
+    return {
+        "pages": [
+            {"title": notion_client.get_page_title(p), "id": p.get("id", "")}
+            for p in pages
+        ],
+        "error": None,
+    }
