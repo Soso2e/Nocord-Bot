@@ -310,10 +310,6 @@ async def _select_search_queries(message: str, max_queries: int = 4) -> list[str
     return _expand_search_queries(queries, max_queries=max_queries)
 
 
-def _text_contains_any_query(text: str, queries: list[str]) -> bool:
-    haystack = text.casefold()
-    return any(query.casefold() in haystack for query in queries if query.strip())
-
 
 async def _search_notion_pages(
     queries: list[str],
@@ -482,13 +478,13 @@ async def _process_with_notion(
             pass
 
     # Fetch Notion page texts
+    # Trust Notion's search API for relevance — no secondary string-match filter.
     notion_results: list[dict] = []
     for page in notion_pages:
         try:
             title = notion_client.get_page_title(page)
             text = await notion_client.get_page_text(page["id"], api_key)
-            searchable_text = f"{title}\n{text}"
-            if (title or text) and _text_contains_any_query(searchable_text, search_queries):
+            if title or text:
                 notion_results.append({
                     "id": page.get("id", ""),
                     "title": title,
@@ -498,10 +494,7 @@ async def _process_with_notion(
         except Exception as exc:
             print(f"[Notion] Page text fetch failed for {page.get('id', '')}: {exc}")
 
-    if notion_pages and not notion_results:
-        await _emit_progress(progress, "Notion候補はありましたが、検索語を含むページ本文/タイトルに限定すると0件でした")
-    else:
-        await _emit_progress(progress, _format_notion_results_found_message(notion_results))
+    await _emit_progress(progress, _format_notion_results_found_message(notion_results))
 
     # No external info found — fall back to the normal single-stage flow
     if not rag_docs and not notion_results:
