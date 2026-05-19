@@ -43,7 +43,7 @@ def _db_dir(db_name: str) -> Path:
 def _default_db_config(db_name: str) -> dict:
     return {
         "name": db_name,
-        "system_prompt": "You are a helpful assistant. Use saved memories when they are relevant and avoid inventing facts.",
+        "system_prompt": "あなたはデータベース（Notion・知識ベース）をもとに回答する専用ボットです。提供されたデータベースの情報を使って回答し、データベースに情報がない場合は「データベースに登録されていません」と伝えてください。",
         "style": "friendly",
         "memory_policy": {
             "auto_save": True,
@@ -181,14 +181,14 @@ def _prepare_history_for_memory_extraction(history_lines: list[str]) -> str:
 
 
 _SYNTHESIS_SYSTEM_PROMPT = (
-    "あなたは情報統制アシスタントです。複数の情報源（RAG知識ベース・Notion）から得られた情報を"
-    "統合・要約し、ユーザーの質問に答えるための簡潔な情報サマリーを日本語で生成してください。\n\n"
+    "あなたは情報抽出アシスタントです。提供されたデータベース情報（RAG知識ベース・Notion）をもとに、"
+    "ユーザーの質問に答えるための情報サマリーを日本語で生成してください。\n\n"
     "ルール:\n"
+    "- 提供された情報源に書かれた内容だけを使う。詳細説明に自分の学習済み知識は使わない\n"
     "- 重複情報は1つにまとめる\n"
     "- 矛盾する情報がある場合は両方を記載し「※情報源間で矛盾あり」と注記する\n"
     "- 質問に無関係な情報は省略する\n"
-    "- 情報がない場合は「関連情報なし」のみ返す\n"
-    "- 推測や補完は行わず、提供された情報のみを使う"
+    "- データベースに該当情報がない場合は「関連情報なし」のみ返す（補完・推測禁止）"
 )
 
 
@@ -309,10 +309,6 @@ async def _select_search_queries(message: str, max_queries: int = 4) -> list[str
         queries = _build_notion_search_queries(message, max_queries=max_queries)
     return _expand_search_queries(queries, max_queries=max_queries)
 
-
-def _text_contains_any_query(text: str, queries: list[str]) -> bool:
-    haystack = text.casefold()
-    return any(query.casefold() in haystack for query in queries if query.strip())
 
 
 async def _search_notion_pages(
@@ -482,13 +478,13 @@ async def _process_with_notion(
             pass
 
     # Fetch Notion page texts
+    # Trust Notion's search API for relevance — no secondary string-match filter.
     notion_results: list[dict] = []
     for page in notion_pages:
         try:
             title = notion_client.get_page_title(page)
             text = await notion_client.get_page_text(page["id"], api_key)
-            searchable_text = f"{title}\n{text}"
-            if (title or text) and _text_contains_any_query(searchable_text, search_queries):
+            if title or text:
                 notion_results.append({
                     "id": page.get("id", ""),
                     "title": title,
@@ -498,10 +494,7 @@ async def _process_with_notion(
         except Exception as exc:
             print(f"[Notion] Page text fetch failed for {page.get('id', '')}: {exc}")
 
-    if notion_pages and not notion_results:
-        await _emit_progress(progress, "Notion候補はありましたが、検索語を含むページ本文/タイトルに限定すると0件でした")
-    else:
-        await _emit_progress(progress, _format_notion_results_found_message(notion_results))
+    await _emit_progress(progress, _format_notion_results_found_message(notion_results))
 
     # No external info found — fall back to the normal single-stage flow
     if not rag_docs and not notion_results:

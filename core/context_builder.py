@@ -4,12 +4,18 @@ from core.memory_manager import find_relevant_memories, get_history
 
 DB_BASE = Path(__file__).parent.parent / "databases"
 
-# Appended to system_prompt when RAG knowledge base is active
+# Appended to system_prompt when RAG/Notion knowledge base is active
 _RAG_CONSTRAINT = (
-    "\n\n以下のルールに従って回答してください：\n"
-    "- 「参照知識ベース」に情報がある場合、それを最優先で使用してください。\n"
-    "- 知識ベースに情報がない場合は「提供された情報には含まれていません」と正直に答えてください。\n"
-    "- 推測や不確かな情報を事実として述べないでください。"
+    "\n\n【回答ルール】\n"
+    "あなたはデータベース（Notion・知識ベース）をもとに回答する専用ボットです。以下の3パターンで回答してください。\n\n"
+    "1. データベースに情報がある場合:\n"
+    "   データベースの内容を主軸に回答してください。文章を読みやすくする程度の最低限の補足は許可しますが、"
+    "詳細な説明や独自の見解は加えないでください。\n\n"
+    "2. データベースに情報がない場合:\n"
+    "   1〜2文の簡単な概要（「〜は〇〇を担当する部署です」程度）を述べたうえで、"
+    "「詳細情報はデータベースに登録されていません」と伝えてください。\n\n"
+    "3. 挨拶・雑談など情報検索を必要としない場合:\n"
+    "   自然に会話として返してください。"
 )
 
 
@@ -85,7 +91,7 @@ def build_messages_with_synthesized_info(
     history = get_history(db_name, session_id, limit=max_ctx)
     memories = find_relevant_memories(db_name, user_input, limit=5)
 
-    messages = [{"role": "system", "content": system_prompt}]
+    messages = [{"role": "system", "content": system_prompt + _RAG_CONSTRAINT}]
 
     if synthesized_info:
         messages.append({
