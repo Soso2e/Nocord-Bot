@@ -1,7 +1,7 @@
 {
   "provider": "openai",
   "base_url": "http://10.192.98.115:1234",
-  "model": "qwen3.5:9b",
+  "model": "qwen3.5-9b",
   "api_key": "lm-studio",
   "timeout": 300,
   "connect_timeout": 10,
@@ -10,5 +10,21 @@
   "pool_timeout": 300,
   "max_retries": 1,
   "retry_backoff_seconds": 2,
-  "options": {}
+  "options": {},
+  "query_llm": {
+    "provider": "openai",
+    "base_url": "http://10.192.98.115:1234",
+    "model": "google/gemma-4-e4b",
+    "api_key": "lm-studio",
+    "timeout": 60,
+    "connect_timeout": 10,
+    "read_timeout": 60,
+    "write_timeout": 60,
+    "pool_timeout": 60,
+    "max_retries": 1,
+    "retry_backoff_seconds": 1,
+    "options": {
+      "temperature": 0
+    }
+  }
 }

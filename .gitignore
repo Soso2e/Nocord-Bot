@@ -12,3 +12,9 @@ databases/*/vector_db/
 config/discord_state.json
 *.egg-info/
 .DS_Store
+.idea/misc.xml
+.idea/PAI_chatbot.iml
+.idea/inspectionProfiles/profiles_settings.xml
+databases/iec/config.json
+databases/nslog/config.json
+databases 
