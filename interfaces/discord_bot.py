@@ -816,6 +816,121 @@ async def rag_paste(interaction: discord.Interaction):
     await interaction.response.send_modal(_IngestTextModal(db_name))
 
 
+@rag_group.command(name="scan_channel", description="チャンネル履歴を遡ってPDF・Google DocsリンクをRAGに収集する")
+@app_commands.describe(
+    channel="スキャン対象のテキストチャンネル（省略時は現在のチャンネル）",
+    limit="遡るメッセージ数の上限（0=無制限、デフォルト1000）",
+)
+async def rag_scan_channel(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel | None = None,
+    limit: int = 1000,
+):
+    import re as _re
+    import httpx as _httpx
+
+    if not _require_guild(interaction):
+        await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
+        return
+    if not _has_manage_guild(interaction):
+        await _send_permission_error(interaction)
+        return
+
+    target: discord.TextChannel = channel or interaction.channel  # type: ignore[assignment]
+    db_name = _db(interaction.guild.id)
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    existing_sources = set(chat_controller.rag_list_sources(db_name))
+
+    _GDOC_ID_RE = _re.compile(r"https://docs\.google\.com/(document|spreadsheets)/d/([^/?#\s<>\"']+)")
+
+    # --- pass 1: collect unique PDFs and Google Docs links from history ---
+    pdf_queue: list[tuple[str, str]] = []   # (filename, attachment_url)
+    gdoc_queue: list[tuple[str, str]] = []  # (canonical_url, type)
+    seen_filenames: set[str] = set()
+    seen_gdoc_ids: set[str] = set()
+    msg_count = 0
+    history_limit: int | None = None if limit == 0 else limit
+
+    progress = await interaction.followup.send(
+        f"チャンネル {target.mention} のスキャンを開始しています...",
+        ephemeral=True,
+        wait=True,
+    )
+
+    async for message in target.history(limit=history_limit, oldest_first=False):
+        msg_count += 1
+        for att in message.attachments:
+            if att.filename.lower().endswith(".pdf"):
+                if att.filename not in seen_filenames and att.filename not in existing_sources:
+                    seen_filenames.add(att.filename)
+                    pdf_queue.append((att.filename, att.url))
+        for m in _GDOC_ID_RE.finditer(message.content):
+            doc_type, doc_id = m.group(1), m.group(2)
+            if doc_id in seen_gdoc_ids:
+                continue
+            if doc_type == "document":
+                canonical = f"https://docs.google.com/document/d/{doc_id}"
+            else:
+                canonical = f"https://docs.google.com/spreadsheets/d/{doc_id}"
+            if canonical not in existing_sources:
+                seen_gdoc_ids.add(doc_id)
+                gdoc_queue.append((canonical, doc_type))
+
+    total_new = len(pdf_queue) + len(gdoc_queue)
+    await progress.edit(content=(
+        f"スキャン完了: {msg_count} 件のメッセージを確認\n"
+        f"新規 PDF: {len(pdf_queue)} 件 / Google Docs: {len(gdoc_queue)} 件\n"
+        f"インジェスト中..."
+    ))
+
+    # --- pass 2: download and ingest ---
+    ingested: list[str] = []
+    errors: list[str] = []
+
+    for filename, url in pdf_queue:
+        try:
+            def _dl(u: str) -> bytes:
+                r = _httpx.get(u, follow_redirects=True, timeout=60)
+                r.raise_for_status()
+                return r.content
+            data = await asyncio.to_thread(_dl, url)
+            text = await asyncio.to_thread(read_bytes, data, filename)
+            count = await asyncio.to_thread(chat_controller.rag_ingest_text, db_name, text, filename)
+            ingested.append(f"PDF `{filename}` ({count} チャンク)")
+        except Exception as exc:
+            errors.append(f"PDF `{filename}`: {exc}")
+
+    for canonical, doc_type in gdoc_queue:
+        try:
+            text = await asyncio.to_thread(fetch_url, canonical)
+            count = await asyncio.to_thread(chat_controller.rag_ingest_text, db_name, text, canonical)
+            kind = "Google Docs" if doc_type == "document" else "Google Sheets"
+            ingested.append(f"{kind} `{canonical}` ({count} チャンク)")
+        except Exception as exc:
+            errors.append(f"Google Docs `{canonical}`: {exc}")
+
+    # --- build result ---
+    lines: list[str] = [f"**チャンネル {target.name} スキャン完了**（{msg_count} メッセージ）\n"]
+    if total_new == 0:
+        lines.append("新規コンテンツはありませんでした（全て既にRAGに登録済みか、対象なし）。")
+    elif ingested:
+        lines.append(f"**追加済み ({len(ingested)} 件)**")
+        lines.extend(f"- {item}" for item in ingested)
+    if errors:
+        lines.append(f"\n**エラー ({len(errors)} 件)**")
+        lines.extend(f"- {e}" for e in errors[:10])
+        if len(errors) > 10:
+            lines.append(f"...他 {len(errors) - 10} 件")
+
+    result = "\n".join(lines)
+    if len(result) > 1900:
+        result = result[:1900] + "\n...(省略)"
+
+    await progress.edit(content=result)
+
+
 @rag_group.command(name="sources", description="現在のDBのRAGインデックスに登録されているソース一覧を表示する")
 async def rag_sources(interaction: discord.Interaction):
     if not _require_guild(interaction):
