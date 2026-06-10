@@ -72,3 +72,16 @@ def bind_guild_db(guild_id: int, db_name: str) -> None:
 def get_guild_db(guild_id: int) -> str | None:
     guild = _load_state()["guilds"].get(str(guild_id), {})
     return guild.get("db_name")
+
+
+def get_guild_sync_state(guild_id: int) -> dict:
+    guild = _load_state()["guilds"].get(str(guild_id), {})
+    return guild.get("sync_state", {"last_sync_at": None, "auto_sync_enabled": False})
+
+
+def update_guild_sync_state(guild_id: int, **kwargs) -> None:
+    state = _load_state()
+    guild_entry = state["guilds"].setdefault(str(guild_id), {})
+    sync_state = guild_entry.setdefault("sync_state", {"last_sync_at": None, "auto_sync_enabled": False})
+    sync_state.update(kwargs)
+    _save_state(state)

@@ -1,13 +1,14 @@
 import asyncio
+import datetime
 import json
 from pathlib import Path
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from core import chat_controller
-from core.db_registry import get_guild_db
+from core.db_registry import get_guild_db, get_guild_sync_state, update_guild_sync_state
 from core.ingest_helpers import SUPPORTED_EXTENSIONS, fetch_url, read_bytes
 
 _VALID_RAG_BACKENDS = ("chroma", "json")
@@ -156,6 +157,135 @@ async def _capture_channel_memories(
     )
 
 
+def _format_messages_for_rag(channel_name: str, messages: list[discord.Message]) -> list[str]:
+    """Group messages into 30-minute conversation blocks for RAG ingestion."""
+    if not messages:
+        return []
+
+    blocks: list[str] = []
+    current_lines: list[str] = []
+    current_date = ""
+    last_ts: datetime.datetime | None = None
+    _WINDOW = 1800  # 30 minutes
+
+    for msg in messages:
+        content = (msg.content or "").strip()
+        if not content:
+            continue
+        author = getattr(msg.author, "display_name", None) or getattr(msg.author, "name", "unknown")
+        ts = msg.created_at if msg.created_at.tzinfo else msg.created_at.replace(tzinfo=datetime.timezone.utc)
+        date_str = ts.strftime("%Y-%m-%d")
+
+        new_block = last_ts is None or (ts - last_ts).total_seconds() > _WINDOW or date_str != current_date
+        if new_block:
+            if current_lines:
+                blocks.append("\n".join(current_lines))
+            current_lines = [
+                f"[#{channel_name} | {ts.strftime('%Y-%m-%d %H:%M')} UTC]",
+                f"{author}: {content}",
+            ]
+            current_date = date_str
+        else:
+            current_lines.append(f"{author}: {content}")
+        last_ts = ts
+
+    if current_lines:
+        blocks.append("\n".join(current_lines))
+
+    return blocks
+
+
+async def _collect_channel_messages(
+    channel: discord.TextChannel,
+    mode: str,
+    limit: int | None,
+    after: datetime.datetime | None,
+) -> list[discord.Message]:
+    if mode == "pinned":
+        try:
+            return [m for m in reversed(await channel.pins()) if not m.author.bot and m.content.strip()]
+        except (discord.Forbidden, discord.HTTPException):
+            return []
+
+    messages: list[discord.Message] = []
+    try:
+        async for msg in channel.history(limit=limit, after=after, oldest_first=True):
+            if not msg.author.bot and msg.content.strip():
+                messages.append(msg)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+    return messages
+
+
+async def _sync_guild_to_rag(
+    guild: discord.Guild,
+    db_name: str,
+    mode: str = "all",
+    limit_per_channel: int | None = 500,
+    after: datetime.datetime | None = None,
+) -> dict:
+    """Scan all accessible text channels (and threads) and ingest into RAG."""
+    total_chunks = 0
+    channels_done = 0
+    errors: list[str] = []
+    me = guild.me
+
+    for channel in guild.text_channels:
+        perms = channel.permissions_for(me)
+        if not (perms.read_messages and perms.read_message_history):
+            continue
+
+        try:
+            if mode != "threads":
+                msgs = await _collect_channel_messages(channel, mode, limit_per_channel, after)
+                if msgs:
+                    source = f"discord:{guild.id}:{channel.id}"
+                    if after is None:
+                        await asyncio.to_thread(chat_controller.rag_delete_by_source, db_name, source)
+                    blocks = _format_messages_for_rag(channel.name, msgs)
+                    if blocks:
+                        count = await asyncio.to_thread(
+                            chat_controller.rag_ingest_text, db_name,
+                            "\n\n---\n\n".join(blocks), source,
+                        )
+                        total_chunks += count
+                        channels_done += 1
+
+            if mode in ("all", "threads"):
+                thread_list: list[discord.Thread] = list(channel.threads)
+                try:
+                    async for t in channel.archived_threads(limit=50):
+                        thread_list.append(t)
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+
+                for thread in thread_list:
+                    try:
+                        thread_msgs: list[discord.Message] = []
+                        async for msg in thread.history(limit=limit_per_channel, after=after, oldest_first=True):
+                            if not msg.author.bot and msg.content.strip():
+                                thread_msgs.append(msg)
+
+                        if thread_msgs:
+                            source = f"discord:{guild.id}:{channel.id}:thread:{thread.id}"
+                            if after is None:
+                                await asyncio.to_thread(chat_controller.rag_delete_by_source, db_name, source)
+                            blocks = _format_messages_for_rag(f"{channel.name}>{thread.name}", thread_msgs)
+                            if blocks:
+                                count = await asyncio.to_thread(
+                                    chat_controller.rag_ingest_text, db_name,
+                                    "\n\n---\n\n".join(blocks), source,
+                                )
+                                total_chunks += count
+                    except Exception as exc:
+                        errors.append(f"thread {thread.name}: {exc}")
+
+        except Exception as exc:
+            errors.append(f"#{channel.name}: {exc}")
+
+    return {"channels_processed": channels_done, "total_chunks": total_chunks, "errors": errors}
+
+
 def _require_guild(interaction: discord.Interaction) -> bool:
     return interaction.guild is not None and interaction.channel is not None
 
@@ -208,10 +338,39 @@ rag_group = app_commands.Group(name="rag", description="現在のDBのRAG（知�
 notion_group = app_commands.Group(name="notion", description="Notion連携の確認・テストを行う")
 
 
+@tasks.loop(time=datetime.time(hour=0, minute=0, tzinfo=datetime.timezone.utc))
+async def _daily_discord_sync() -> None:
+    """Nightly auto-sync (00:00 UTC = 09:00 JST) for guilds with auto_sync_enabled."""
+    for guild in bot.guilds:
+        sync_state = get_guild_sync_state(guild.id)
+        if not sync_state.get("auto_sync_enabled"):
+            continue
+        db_name = get_guild_db(guild.id) or _default_db()
+        after: datetime.datetime | None = None
+        last_sync_str = sync_state.get("last_sync_at")
+        if last_sync_str:
+            try:
+                after = datetime.datetime.fromisoformat(last_sync_str)
+            except ValueError:
+                pass
+        scan_start = datetime.datetime.now(datetime.timezone.utc)
+        try:
+            result = await _sync_guild_to_rag(guild, db_name, mode="all", limit_per_channel=500, after=after)
+            update_guild_sync_state(guild.id, last_sync_at=scan_start.isoformat())
+            print(
+                f"[AutoSync] {guild.name}: "
+                f"{result['channels_processed']} ch, {result['total_chunks']} chunks"
+            )
+        except Exception as exc:
+            print(f"[AutoSync] Guild {guild.id} ({guild.name}) failed: {exc}")
+
+
 @bot.event
 async def on_ready():
     await _sync_slash_commands()
     print(f"[Discord] Logged in as {bot.user} (id={bot.user.id})")
+    if not _daily_discord_sync.is_running():
+        _daily_discord_sync.start()
 
 
 @bot.event
@@ -929,6 +1088,95 @@ async def rag_scan_channel(
         result = result[:1900] + "\n...(省略)"
 
     await progress.edit(content=result)
+
+
+@rag_group.command(name="sync_server", description="サーバーの全チャンネルをスキャンしてRAGに同期する")
+@app_commands.describe(
+    mode="収集モード: all=全メッセージ / pinned=ピン留めのみ / threads=スレッドのみ",
+    limit="チャンネルあたりの上限メッセージ数（0=無制限、デフォルト500）",
+    incremental="True=前回以降の差分のみ取得 / False=全件フルスキャン",
+)
+@app_commands.choices(mode=[
+    app_commands.Choice(name="all — 全メッセージ", value="all"),
+    app_commands.Choice(name="pinned — ピン留めのみ", value="pinned"),
+    app_commands.Choice(name="threads — スレッドのみ", value="threads"),
+])
+async def rag_sync_server(
+    interaction: discord.Interaction,
+    mode: str = "all",
+    limit: int = 500,
+    incremental: bool = True,
+):
+    if not _require_guild(interaction):
+        await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
+        return
+    if not _has_manage_guild(interaction):
+        await _send_permission_error(interaction)
+        return
+
+    guild = interaction.guild
+    db_name = _db(guild.id)
+    sync_state = get_guild_sync_state(guild.id)
+    last_sync_str = sync_state.get("last_sync_at")
+
+    after: datetime.datetime | None = None
+    if incremental and last_sync_str:
+        try:
+            after = datetime.datetime.fromisoformat(last_sync_str)
+        except ValueError:
+            pass
+
+    limit_val: int | None = limit if limit > 0 else None
+    mode_labels = {"all": "全メッセージ", "pinned": "ピン留めのみ", "threads": "スレッドのみ"}
+    after_label = f"（{after.strftime('%Y-%m-%d %H:%M')} UTC 以降）" if after else "（フルスキャン）"
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    progress_msg = await interaction.followup.send(
+        f"**{guild.name}** の同期を開始します...\n"
+        f"モード: {mode_labels.get(mode, mode)} {after_label}",
+        ephemeral=True,
+        wait=True,
+    )
+
+    scan_start = datetime.datetime.now(datetime.timezone.utc)
+    result = await _sync_guild_to_rag(guild, db_name, mode=mode, limit_per_channel=limit_val, after=after)
+    update_guild_sync_state(guild.id, last_sync_at=scan_start.isoformat())
+
+    lines = [
+        f"**サーバー同期完了 — `{guild.name}`**",
+        f"処理チャンネル数: {result['channels_processed']} 件",
+        f"追加チャンク数: {result['total_chunks']} 件",
+        f"DB: `{db_name}`",
+    ]
+    if result["errors"]:
+        lines.append(f"\nエラー ({len(result['errors'])} 件):")
+        lines.extend(f"- {e}" for e in result["errors"][:5])
+        if len(result["errors"]) > 5:
+            lines.append(f"...他 {len(result['errors']) - 5} 件")
+
+    body = "\n".join(lines)
+    if len(body) > 1900:
+        body = body[:1900] + "\n...（省略）"
+    await progress_msg.edit(content=body)
+
+
+@rag_group.command(name="auto_sync", description="毎朝 09:00 JST の Discord 自動同期を有効化/無効化する")
+@app_commands.describe(enabled="True=有効化、False=無効化")
+async def rag_auto_sync(interaction: discord.Interaction, enabled: bool):
+    if not _require_guild(interaction):
+        await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
+        return
+    if not _has_manage_guild(interaction):
+        await _send_permission_error(interaction)
+        return
+
+    update_guild_sync_state(interaction.guild.id, auto_sync_enabled=enabled)
+    db_name = _db(interaction.guild.id)
+    if enabled:
+        msg = f"自動同期を **有効** にしました。\n毎日 09:00 JST に DB `{db_name}` へ差分同期します。"
+    else:
+        msg = "自動同期を **無効** にしました。"
+    await interaction.response.send_message(msg, ephemeral=True)
 
 
 @rag_group.command(name="sources", description="現在のDBのRAGインデックスに登録されているソース一覧を表示する")
