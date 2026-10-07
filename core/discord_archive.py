@@ -96,7 +96,7 @@ class DiscordArchive:
                        [data[k] for k in FIELDS] + [utc()])
             db.execute('DELETE FROM discord_attachments WHERE message_id=?', (data['message_id'],))
             for a in normalized:
-                db.execute('INSERT INTO discord_attachments VALUES (?,?,?,?,?,?,?)',
+                db.execute('INSERT INTO discord_attachments VALUES (?,?,?,?,?,?)',
                            (a['attachment_id'], data['message_id'], a['filename'],
                             a['content_type'], a['size'], a['url']))
         return True
