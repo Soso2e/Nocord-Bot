@@ -46,9 +46,9 @@ def search_knowledge(db_name, query, k=4, score_threshold=0.3, *, archive_guild_
         if bound == db_name:
             try:
                 ingestor = get_ingestor()
-                hits = create_search(ingestor.archive, policy).search(
-                    query, limit=k, guild_id=str(archive_guild_id))
                 search = create_search(ingestor.archive, policy)
+                hits = search.search(
+                    query, limit=k, guild_id=str(archive_guild_id))
                 seen = set()
                 for hit in hits:
                     if hit['message_id'] in seen:

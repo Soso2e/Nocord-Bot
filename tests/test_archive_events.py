@@ -47,3 +47,11 @@ class EventTests(ArchiveTestCase):
             with self.assertLogs('core.discord_archive_sync') as logs:
                 await ingest.on_create(discord_message())
             self.assertNotIn('secret body', str(logs.output))
+
+    async def test_delete_scrubs_after_revocation_without_collecting_denied_messages(self):
+        ingest = ArchiveIngestor(self.archive, self.policy)
+        await ingest.on_create(discord_message())
+        self.policy.allow_guilds.clear()
+        ingest.delete(10, 20, [1, 2])
+        self.assertEqual(self.archive.get_message('1')['content'], '')
+        self.assertIsNone(self.archive.get_message('2'))

@@ -6,6 +6,10 @@ from core.discord_archive import DiscordArchive, utc
 log = logging.getLogger(__name__)
 
 
+def private_thread(channel):
+    return bool(getattr(channel, 'is_private', lambda: False)())
+
+
 def message_dto(message):
     channel = message.channel
     parent_id = getattr(channel, 'parent_id', None)
@@ -17,6 +21,7 @@ def message_dto(message):
         channel_name=getattr(parent, 'name', None) if parent_id else channel.name,
         thread_id=str(channel.id) if parent_id else None,
         thread_name=channel.name if parent_id else None,
+        is_private_thread=private_thread(channel),
         author_id=str(author.id), author_name=getattr(author, 'display_name', author.name),
         content=message.content, created_at=message.created_at, edited_at=message.edited_at,
         reply_to_message_id=str(message.reference.message_id)
@@ -30,12 +35,14 @@ class ArchiveIngestor:
     def __init__(self, archive, policy):
         self.archive = archive
         self.policy = policy
+        archive.bind_zone(policy.zone)
 
     def save(self, message):
         guild = getattr(message, 'guild', None)
         channel = message.channel
         parent = getattr(channel, 'parent_id', None)
-        if not self.policy.allows(getattr(guild, 'id', None), parent or channel.id):
+        if not self.policy.allows(getattr(guild, 'id', None), parent or channel.id,
+                                  channel.id if parent else None, private_thread(channel)):
             return False
         if message.author.bot and not self.policy.include_bots:
             return False
@@ -62,7 +69,8 @@ class ArchiveIngestor:
             if channel is None:
                 channel = await bot.fetch_channel(payload.channel_id)
             parent = getattr(channel, 'parent_id', None)
-            if not self.policy.allows(payload.guild_id, parent or channel.id):
+            if not self.policy.allows(payload.guild_id, parent or channel.id,
+                                      channel.id if parent else None, private_thread(channel)):
                 return
             # Partial raw payloads omit unchanged fields; fetch full authoritative DTO.
             message = await channel.fetch_message(payload.message_id)
@@ -70,19 +78,23 @@ class ArchiveIngestor:
         except Exception as exc:
             log.warning('Archive update failed (%s)', type(exc).__name__)
 
-    def delete(self, guild_id, channel_id, message_ids, parent_id=None):
+    def delete(self, guild_id, channel_id, message_ids, parent_id=None, private=False):
         for mid in message_ids:
             old = self.archive.get_message(mid)
             if old:
-                if not self.policy.allows_message(old):
+                # Scrub already-held data even after consent revocation; never collect new text.
+                if (old['guild_id'] != str(guild_id) or
+                        (old['thread_id'] or old['channel_id']) != str(channel_id)):
                     continue
-            elif not self.policy.allows(guild_id, parent_id or channel_id):
+            elif not self.policy.allows(guild_id, parent_id or channel_id,
+                                        channel_id if parent_id else None, private):
                 continue
             else:
                 # Uncached deletion before history finishes must also prevent resurrection.
                 self.archive.upsert_message(dict(message_id=str(mid), guild_id=str(guild_id),
                     channel_id=str(parent_id or channel_id),
-                    thread_id=str(channel_id) if parent_id else None, content='', created_at=utc()))
+                    thread_id=str(channel_id) if parent_id else None,
+                    is_private_thread=private, content='', created_at=utc()))
             self.archive.mark_deleted(mid)
             self.event_seen()
 
@@ -91,7 +103,7 @@ class ArchiveIngestor:
             channel = bot.get_channel(payload.channel_id)
             mids = getattr(payload, 'message_ids', None) or [payload.message_id]
             await asyncio.to_thread(self.delete, payload.guild_id, payload.channel_id,
-                                    mids, getattr(channel, 'parent_id', None))
+                                    mids, getattr(channel, 'parent_id', None), private_thread(channel))
         except Exception as exc:
             log.warning('Archive delete failed (%s)', type(exc).__name__)
 

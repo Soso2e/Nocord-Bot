@@ -11,7 +11,7 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(p.allows('10', '21'))
         self.assertFalse(p.allows(None, '20'))
         clause, params = p.sql_scope()
-        self.assertEqual(params, ['10', '20'])
+        self.assertEqual(params, ['10', '20', '20'])
         self.assertIn('guild_id', clause)
 
     def test_zone_paths_are_independent(self):

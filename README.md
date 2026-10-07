@@ -1,5 +1,9 @@
 # Nocord - Bot
 
+Knowledge Gateway / Discord Archive MCP の設定・起動・移行・バックアップは
+[運用ガイド](docs/knowledge-gateway.md) を参照してください。
+Archiveは初期設定では無効で、明示Allowlistを設定したTrust Zoneだけで収集します。
+
 Discord / Slack / HTTP API に対応したマルチインターフェース AI チャットボット。  
 LM Studio の OpenAI 互換 API をバックエンドに、RAG（検索拡張生成）ベースの専属 Q&A エージェントとして利用できます。
 

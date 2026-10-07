@@ -1,7 +1,6 @@
 """Message-level source of truth. No Discord, LLM or vector dependency."""
 from contextlib import contextmanager
 from datetime import datetime, timezone
-import json
 from pathlib import Path
 import sqlite3
 
@@ -17,7 +16,7 @@ def utc(value=None):
 
 
 FIELDS = ('message_id guild_id guild_name channel_id channel_name thread_id thread_name '
-          'author_id author_name content created_at edited_at reply_to_message_id discord_url').split()
+          'author_id author_name content created_at edited_at reply_to_message_id discord_url is_private_thread').split()
 
 
 class DiscordArchive:
@@ -26,7 +25,7 @@ class DiscordArchive:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version > 1:
+            if version > 2:
                 raise ValueError('Archive schema is newer than this application')
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS discord_messages (
@@ -42,8 +41,21 @@ class DiscordArchive:
                     filename TEXT, content_type TEXT, size INTEGER, url TEXT);
                 CREATE INDEX IF NOT EXISTS archive_channel_time
                     ON discord_messages(channel_id, thread_id, created_at, message_id);
-                PRAGMA user_version=1;
             ''')
+            columns = {r[1] for r in db.execute('PRAGMA table_info(discord_messages)')}
+            if 'is_private_thread' not in columns:
+                db.execute('ALTER TABLE discord_messages ADD COLUMN is_private_thread INTEGER NOT NULL DEFAULT 0')
+                # v1 could not distinguish thread visibility: require explicit consent until refreshed.
+                db.execute('UPDATE discord_messages SET is_private_thread=1 WHERE thread_id IS NOT NULL')
+            db.execute('PRAGMA user_version=2')
+
+    def bind_zone(self, zone):
+        with self.connect() as db:
+            db.execute('CREATE TABLE IF NOT EXISTS archive_meta (key TEXT PRIMARY KEY,value TEXT)')
+            db.execute("INSERT OR IGNORE INTO archive_meta VALUES ('trust_zone',?)", (zone,))
+            row = db.execute("SELECT value FROM archive_meta WHERE key='trust_zone'").fetchone()
+            if row and row[0] != zone:
+                raise ValueError('Archive belongs to another trust zone')
 
     @contextmanager
     def connect(self):
@@ -63,10 +75,16 @@ class DiscordArchive:
             if data[key] is None:
                 raise ValueError(f'Missing {key}')
             data[key] = str(data[key])
+        if data['created_at'] is None:
+            raise ValueError('Missing created_at')
+        for key in ('thread_id', 'author_id', 'reply_to_message_id'):
+            if data[key] is not None:
+                data[key] = str(data[key])
         data['created_at'] = utc(data['created_at'])
         if data['edited_at']:
             data['edited_at'] = utc(data['edited_at'])
         data['content'] = data['content'] or ''
+        data['is_private_thread'] = int(bool(data['is_private_thread']))
         location = data['thread_id'] or data['channel_id']
         data['discord_url'] = f"https://discord.com/channels/{data['guild_id']}/{location}/{data['message_id']}"
         with self.connect() as db:

@@ -74,6 +74,30 @@ class ReconcileTests(ArchiveTestCase):
         await r.channel(channel)
         self.assertIsNotNone(self.archive.get_message('1'))
 
+    async def test_failed_channel_does_not_advance_or_stop_other_channels(self):
+        self.policy.allow_guilds['10']['channels'].append('22')
+        r = self.reconciler()
+        bad = Channel(20, failure=True)
+        good = Channel(22, [discord_message(2, 22)])
+        result = await r.run([NS(id=10, text_channels=[bad, good])])
+        self.assertEqual(len(result['errors']), 1)
+        self.assertIsNotNone(self.archive.get_message('2'))
+        with self.archive.connect() as db:
+            checkpoint_ids = [row[0] for row in db.execute('SELECT channel_id FROM archive_checkpoints')]
+        self.assertEqual(checkpoint_ids, ['22'])
+
+    async def test_explicit_private_thread_without_parent_consent(self):
+        self.policy.allow_guilds['10']['channels'] = ['40']
+        r = self.reconciler()
+        message = discord_message(2, 40, 20)
+        message.channel.is_private = lambda: True
+        thread = Channel(40, [message], parent=20)
+        thread.is_private = lambda: True
+        guild = NS(id=10, text_channels=[Channel(20)], get_channel_or_thread=lambda _: thread)
+        result = await r.run([guild])
+        self.assertEqual(result['errors'], [])
+        self.assertTrue(self.archive.get_message('2')['is_private_thread'])
+
     async def test_explicit_not_found_repairs_delete_permission_error_does_not(self):
         channel = Channel(20, [discord_message()])
         r = self.reconciler()

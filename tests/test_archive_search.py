@@ -5,6 +5,22 @@ from core.archive_search import ArchiveSearch
 
 
 class SearchTests(ArchiveTestCase):
+    async def test_attachment_only_does_not_block_vector_batch(self):
+        empty = message('1'); empty['content'] = ''
+        self.archive.upsert_message(empty)
+        self.archive.upsert_message(message('2'))
+        embed = Mock(return_value=[[1., 0.]])
+        search = ArchiveSearch(self.archive, self.policy, embed=embed)
+        self.assertEqual(search.index_pending(), 1)
+        embed.assert_called_once_with(['WEVORA'])
+
+    async def test_attachment_provenance_in_messages_and_context(self):
+        self.archive.upsert_message(message(attachments=[dict(attachment_id='50',
+            filename='guide.pdf', content_type='application/pdf', size=4, url='https://example.org/x')]))
+        search = ArchiveSearch(self.archive, self.policy)
+        self.assertEqual(search.get_messages('20')[0]['attachments'][0]['attachment_id'], '50')
+        self.assertEqual(search.get_message_context('1')[0]['attachments'][0]['filename'], 'guide.pdf')
+
     async def test_fts_filters_provenance_and_rebuild(self):
         self.archive.upsert_message(message())
         denied = message('2'); denied['channel_id'] = '21'

@@ -18,6 +18,7 @@ def evidence(row):
 class ArchiveSearch:
     def __init__(self, archive, policy, embed=None, model='bge-m3'):
         self.archive, self.policy, self.embed, self.model = archive, policy, embed, model
+        archive.bind_zone(policy.zone)
         with archive.connect() as db:
             exists = db.execute("SELECT 1 FROM sqlite_master WHERE name='archive_fts'").fetchone()
             db.executescript('''
@@ -147,17 +148,17 @@ class ArchiveSearch:
     def get_message_context(self, message_id, before=10, after=10):
         if not self.get_message(message_id):
             return []
-        return [evidence(r) for r in self.archive.get_context(message_id, before, after)
-                if self.policy.allows_message(r)]
+        ids = [r['message_id'] for r in self.archive.get_context(message_id, before, after)]
+        return [row for mid in ids if (row := self.get_message(mid))]
 
     def get_messages(self, channel_id, after=None, before=None, limit=20, **filters):
         scope, args = self.scope(dict(filters, after=after, before=before))
         with self.archive.connect() as db:
-            rows = db.execute(f'SELECT m.* FROM discord_messages m WHERE {scope} '
+            rows = list(db.execute(f'SELECT m.* FROM discord_messages m WHERE {scope} '
                 'AND (m.channel_id=? AND m.thread_id IS NULL OR m.thread_id=?) '
                 'ORDER BY m.created_at,m.message_id LIMIT ?',
-                args + [str(channel_id), str(channel_id), bounded(limit)])
-            return [evidence(dict(r)) for r in rows]
+                args + [str(channel_id), str(channel_id), bounded(limit)]))
+        return [row for r in rows if (row := self.get_message(r['message_id']))]
 
     def get_thread(self, thread_id, after=None, limit=100):
         return self.get_messages(thread_id, after=after, limit=limit, thread_id=str(thread_id))
@@ -180,7 +181,8 @@ class ArchiveSearch:
             rows = [dict(r) for r in db.execute(
                 'SELECT m.* FROM discord_messages m LEFT JOIN archive_vectors v '
                 'ON v.message_id=m.message_id AND v.revision=m.revision AND v.model=? '
-                f'WHERE {scope} AND v.message_id IS NULL ORDER BY m.created_at,m.message_id LIMIT ?',
+                f'WHERE {scope} AND length(trim(m.content))>0 AND v.message_id IS NULL '
+                'ORDER BY m.created_at,m.message_id LIMIT ?',
                 [self.model] + args + [bounded(limit)])]
         if not rows:
             return 0

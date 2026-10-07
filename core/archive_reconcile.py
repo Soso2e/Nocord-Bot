@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import logging
 from core.discord_archive import utc
+from core.discord_archive_sync import private_thread
 
 log = logging.getLogger(__name__)
 
@@ -26,7 +27,8 @@ class ArchiveReconciler:
 
     async def channel(self, channel):
         parent_id = getattr(channel, 'parent_id', None)
-        if not self.policy.allows(channel.guild.id, parent_id or channel.id):
+        if not self.policy.allows(channel.guild.id, parent_id or channel.id,
+                                  channel.id if parent_id else None, private_thread(channel)):
             return
         started = datetime.now(timezone.utc)
         with self.archive.connect() as db:
@@ -35,7 +37,7 @@ class ArchiveReconciler:
         backfill = self.policy.config.get('backfill', {'mode': 'none'})
         mode = backfill.get('mode', 'none')
         limit = None
-        after = datetime.fromisoformat(row[0]) if row else None
+        after = datetime.fromisoformat(row[0]) - timedelta(seconds=1) if row else None
         oldest_first = True
         if not row:
             if mode == 'none':
@@ -78,6 +80,7 @@ class ArchiveReconciler:
         errors = []
         processed = 0
         channels = list(guild.text_channels) + list(getattr(guild, 'forums', []))
+        visited = set()
         for channel in channels:
             if not self.policy.allows(guild.id, channel.id):
                 continue
@@ -94,10 +97,25 @@ class ArchiveReconciler:
             for target in targets:
                 try:
                     await self.channel(target)
+                    visited.add(str(target.id))
                     processed += 1
                 except Exception as exc:
                     errors.append(f'{target.id}:{type(exc).__name__}')
                     log.warning('Archive reconcile channel %s failed (%s)', target.id, type(exc).__name__)
+        # Explicit thread consent may exist without consent for its parent channel.
+        allowed_ids = self.policy.allow_guilds.get(str(guild.id), {}).get('channels', [])
+        known_parents = {str(c.id) for c in channels}
+        for cid in allowed_ids:
+            if str(cid) in visited or str(cid) in known_parents:
+                continue
+            try:
+                target = getattr(guild, 'get_channel_or_thread', lambda _: None)(int(cid))
+                if target is None:
+                    target = await guild.fetch_channel(int(cid))
+                await self.channel(target)
+                processed += 1
+            except Exception as exc:
+                errors.append(f'{cid}:{type(exc).__name__}')
         return {'channels_processed': processed, 'errors': errors}
 
     async def run(self, guilds):
