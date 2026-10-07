@@ -56,6 +56,12 @@ async def main():
     cfg = _load_app_cfg()
     tasks = []
 
+    if cfg.get("mcp", {}).get("enabled", False):
+        from interfaces.mcp_server import run_http
+        t = threading.Thread(target=run_http, args=(cfg["mcp"],), daemon=True)
+        t.start()
+        print("[MCP] Read-only archive server starting")
+
     # HTTP API
     if cfg.get("http", {}).get("enabled", True):
         host = cfg["http"].get("host", "0.0.0.0")
