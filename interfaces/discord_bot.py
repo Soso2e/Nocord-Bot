@@ -375,6 +375,8 @@ async def on_ready():
 
 @bot.event
 async def on_message(message: discord.Message):
+    from core.discord_archive_sync import dispatch
+    await dispatch('create', message)
     if message.author.bot:
         return
 
@@ -421,6 +423,24 @@ async def on_message(message: discord.Message):
             return
 
     await bot.process_commands(message)
+
+
+@bot.event
+async def on_raw_message_edit(payload):
+    from core.discord_archive_sync import dispatch
+    await dispatch('update', payload, bot)
+
+
+@bot.event
+async def on_raw_message_delete(payload):
+    from core.discord_archive_sync import dispatch
+    await dispatch('delete', payload, bot)
+
+
+@bot.event
+async def on_raw_bulk_message_delete(payload):
+    from core.discord_archive_sync import dispatch
+    await dispatch('delete', payload, bot)
 
 
 @bot.command(name="chat")
