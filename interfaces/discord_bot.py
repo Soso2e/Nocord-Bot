@@ -34,8 +34,8 @@ _background_tasks: set[asyncio.Task] = set()
 
 def _load_app_config() -> dict:
     try:
-        with open(APP_CONFIG_PATH, encoding="utf-8") as f:
-            return json.load(f)
+        from core.gateway_config import load_app_config
+        return load_app_config()
     except Exception:
         return {}
 

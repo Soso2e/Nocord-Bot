@@ -1,0 +1,17 @@
+{
+  "default_db": "general",
+  "discord": {"enabled": true},
+  "http": {"enabled": false},
+  "slack": {"enabled": false},
+  "discord_archive": {
+    "enabled": true,
+    "trust_zone": "school",
+    "db_path": "data/school/archive.sqlite",
+    "include_bots": false,
+    "allow_guilds": {},
+    "backfill": {"mode": "none"},
+    "repair_days": 7,
+    "vector": {"enabled": false}
+  },
+  "mcp": {"enabled": false, "host": "127.0.0.1", "port": 8001}
+}

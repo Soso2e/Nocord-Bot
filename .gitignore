@@ -1,4 +1,13 @@
 .env
+.env.*
+!.env.example
+config/*.local.json
+data/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+databases/*/vector_db.json
 __pycache__/
 *.pyc
 *.pyo

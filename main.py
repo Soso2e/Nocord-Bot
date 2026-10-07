@@ -22,8 +22,8 @@ CFG_PATH = Path(__file__).parent / "config" / "app.json"
 
 
 def _load_app_cfg() -> dict:
-    with open(CFG_PATH, encoding="utf-8") as f:
-        return json.load(f)
+    from core.gateway_config import load_app_config
+    return load_app_config()
 
 
 # ── HTTP API (uvicorn, 別スレッド) ────────────────────────────────────────────
