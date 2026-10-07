@@ -341,6 +341,8 @@ notion_group = app_commands.Group(name="notion", description="Notion連携の確
 @tasks.loop(time=datetime.time(hour=0, minute=0, tzinfo=datetime.timezone.utc))
 async def _daily_discord_sync() -> None:
     """Nightly auto-sync (00:00 UTC = 09:00 JST) for guilds with auto_sync_enabled."""
+    from core.archive_reconcile import reconcile
+    await reconcile(bot)
     for guild in bot.guilds:
         sync_state = get_guild_sync_state(guild.id)
         if not sync_state.get("auto_sync_enabled"):
@@ -367,6 +369,8 @@ async def _daily_discord_sync() -> None:
 
 @bot.event
 async def on_ready():
+    from core.archive_reconcile import reconcile
+    _track_background_task(asyncio.create_task(reconcile(bot)))
     await _sync_slash_commands()
     print(f"[Discord] Logged in as {bot.user} (id={bot.user.id})")
     if not _daily_discord_sync.is_running():
