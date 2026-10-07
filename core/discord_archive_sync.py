@@ -107,6 +107,8 @@ def get_ingestor():
         return None
     if _ingestor is None or _ingestor.policy.config != policy.config:
         _ingestor = ArchiveIngestor(DiscordArchive(policy.database_path()), policy)
+        from core.archive_search import ArchiveSearch
+        ArchiveSearch(_ingestor.archive, policy)
     return _ingestor
 
 

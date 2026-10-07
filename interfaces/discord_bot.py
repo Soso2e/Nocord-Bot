@@ -225,6 +225,12 @@ async def _sync_guild_to_rag(
     after: datetime.datetime | None = None,
 ) -> dict:
     """Scan all accessible text channels (and threads) and ingest into RAG."""
+    from core.discord_archive_sync import get_ingestor
+    ingestor = get_ingestor()
+    if ingestor:
+        from core.archive_reconcile import ArchiveReconciler
+        result = await ArchiveReconciler(ingestor).run([guild])
+        return dict(result, total_chunks=0, archive_mode=True)
     total_chunks = 0
     channels_done = 0
     errors: list[str] = []
@@ -367,10 +373,18 @@ async def _daily_discord_sync() -> None:
             print(f"[AutoSync] Guild {guild.id} ({guild.name}) failed: {exc}")
 
 
+@tasks.loop(seconds=60)
+async def _archive_index_worker():
+    from core.archive_operations import index_once
+    await asyncio.to_thread(index_once)
+
+
 @bot.event
 async def on_ready():
     from core.archive_reconcile import reconcile
     _track_background_task(asyncio.create_task(reconcile(bot)))
+    if not _archive_index_worker.is_running():
+        _archive_index_worker.start()
     await _sync_slash_commands()
     print(f"[Discord] Logged in as {bot.user} (id={bot.user.id})")
     if not _daily_discord_sync.is_running():
@@ -408,6 +422,7 @@ async def on_message(message: discord.Message):
                         _session(message.channel.id),
                         _db(message.guild.id if message.guild else None),
                         progress=progress,
+                        archive_guild_id=str(message.guild.id) if message.guild else None,
                     )
                 except RuntimeError as exc:
                     if capture_task is not None:
@@ -467,6 +482,7 @@ async def cmd_chat(ctx: commands.Context, *, text: str):
                 _session(ctx.channel.id),
                 _db(ctx.guild.id if ctx.guild else None),
                 progress=progress,
+                archive_guild_id=str(ctx.guild.id) if ctx.guild else None,
             )
         except RuntimeError as exc:
             if capture_task is not None:
@@ -517,6 +533,7 @@ async def slash_chat(interaction: discord.Interaction, text: str):
             _session(interaction.channel.id),
             _db(interaction.guild.id if interaction.guild else None),
             progress=progress,
+            archive_guild_id=str(interaction.guild.id) if interaction.guild else None,
         )
     except RuntimeError as exc:
         if capture_task is not None:

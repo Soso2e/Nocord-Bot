@@ -8,6 +8,7 @@
     "trust_zone": "school",
     "db_path": "data/school/archive.sqlite",
     "include_bots": false,
+    "qa_enabled": true,
     "allow_guilds": {},
     "backfill": {"mode": "none"},
     "repair_days": 7,

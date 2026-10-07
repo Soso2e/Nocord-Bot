@@ -8,6 +8,7 @@
     "trust_zone": "personal",
     "db_path": "data/personal/archive.sqlite",
     "include_bots": false,
+    "qa_enabled": true,
     "allow_guilds": {},
     "backfill": {"mode": "days", "days": 30},
     "repair_days": 7,
