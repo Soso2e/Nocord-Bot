@@ -72,6 +72,10 @@ class ArchiveReconciler:
                         raise
                 else:
                     await asyncio.to_thread(self.ingestor.save, message)
+        current = self.ingestor.current_policy()
+        if not current.allows(channel.guild.id, parent_id or channel.id,
+                               channel.id if parent_id else None, private_thread(channel)):
+            return
         with self.archive.connect() as db:
             db.execute('INSERT OR REPLACE INTO archive_checkpoints VALUES (?,?)',
                        (str(channel.id), utc(started)))

@@ -58,6 +58,20 @@ Trust Zone名はDB内にも固定され、別Zone名で同一DBを開くと失�
 
 ## Allowlist
 
+ID指定の代わりに、サーバー管理権限を持つユーザーが対象チャンネルで `/archive register` を実行できます。
+`channel` オプションならチャンネル選択から登録できます。解除は `/archive unregister`、確認は `/archive list` です。
+起動設定でArchiveを有効化しておく必要があり、未登録のチャンネルはDefault Denyのままです。
+登録だけでは過去ログを読みません。初回Backfillを実行する場合は `/rag sync_server` を使います。
+公開threadは親の許可を継承しますが、そのthreadでunregisterした場合は個別拒否が優先されます。
+親を解除しても明示登録した子threadは許可が残るため、必要なら子も解除してください。
+
+コマンド設定はDBと同じ場所の `archive.allowlist.json`（DB名が違えばそのstem）へ原子的に保存します。
+設定ファイルのAllowlistに追加／拒否を重ねる方式で、tracked configは書き換えません。
+イベント・MCP検索は次の処理から反映し、進行中のBackfillも保存直前に同意を再確認します。
+このファイルも同じZone内で別途backupし、DBパス変更後のrestore時には対応する名前で復元してください。
+新しい保存先に登録ファイルがない場合はconfigのAllowlistだけが適用され、安全側で登録をやり直せます。
+登録ファイル破損やZone不一致は保存／検索を拒否するため、勝手に空設定へフォールバックしません。
+
 ```json
 {
   "discord_archive": {

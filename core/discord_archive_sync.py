@@ -32,19 +32,27 @@ def message_dto(message):
 
 
 class ArchiveIngestor:
-    def __init__(self, archive, policy):
+    def __init__(self, archive, policy, policy_provider=None):
         self.archive = archive
         self.policy = policy
+        self.policy_provider = policy_provider
         archive.bind_zone(policy.zone)
 
+    def current_policy(self):
+        policy = self.policy_provider() if self.policy_provider else self.policy
+        if policy.zone != self.policy.zone or policy.database_path() != self.policy.database_path():
+            raise ValueError('Archive configuration changed during ingestion')
+        return policy
+
     def save(self, message):
+        policy = self.current_policy()
         guild = getattr(message, 'guild', None)
         channel = message.channel
         parent = getattr(channel, 'parent_id', None)
-        if not self.policy.allows(getattr(guild, 'id', None), parent or channel.id,
+        if not policy.allows(getattr(guild, 'id', None), parent or channel.id,
                                   channel.id if parent else None, private_thread(channel)):
             return False
-        if message.author.bot and not self.policy.include_bots:
+        if message.author.bot and not policy.include_bots:
             return False
         changed = self.archive.upsert_message(message_dto(message))
         self.event_seen()
@@ -79,6 +87,7 @@ class ArchiveIngestor:
             log.warning('Archive update failed (%s)', type(exc).__name__)
 
     def delete(self, guild_id, channel_id, message_ids, parent_id=None, private=False):
+        policy = self.current_policy()
         for mid in message_ids:
             old = self.archive.get_message(mid)
             if old:
@@ -86,7 +95,7 @@ class ArchiveIngestor:
                 if (old['guild_id'] != str(guild_id) or
                         (old['thread_id'] or old['channel_id']) != str(channel_id)):
                     continue
-            elif not self.policy.allows(guild_id, parent_id or channel_id,
+            elif not policy.allows(guild_id, parent_id or channel_id,
                                         channel_id if parent_id else None, private):
                 continue
             else:
@@ -118,7 +127,7 @@ def get_ingestor():
     if not policy.enabled:
         return None
     if _ingestor is None or _ingestor.policy.config != policy.config:
-        _ingestor = ArchiveIngestor(DiscordArchive(policy.database_path()), policy)
+        _ingestor = ArchiveIngestor(DiscordArchive(policy.database_path()), policy, policy_provider=load_policy)
         from core.archive_search import ArchiveSearch
         ArchiveSearch(_ingestor.archive, policy)
     return _ingestor

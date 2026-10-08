@@ -92,3 +92,16 @@ Refs #27, #28, #31, #29, #30, #32, #33, #34, #35。
 Validation: Windows Python3.12で42 tests、compileall、pip check、diff check成功。
 Manual pending: 実Discord、モデル品質、ChatGPT等の外部MCP認証／接続、リモートCI。
 運用・移行手順: `docs/knowledge-gateway.md`。
+
+## 2026-10-08: Discordからの保存対象登録
+
+ユーザー要望に基づき `/archive register`・`/archive unregister`・`/archive list` を追加。
+サーバー管理権限をruntimeでも検証し、現在の場所またはchannel pickerで選んだ場所を登録できる。
+Zone別ローカル `*.allowlist.json` に永続化し、configのID指定と合成する。
+解除は設定済みの許可や公開threadの親からの継承より優先し、MCP／保存の共通境界へ反映する。
+進行中の収集も保存直前に最新の同意を再確認する。秘密情報やtracked configを変更しない。
+
+新規主要ファイル: `core/archive_allowlist.py`、`interfaces/archive_commands.py`、
+`tests/test_archive_registration.py`。README・運用ガイドも更新。
+追加後の検証: **50 tests成功**、compileall、pip check、diff check成功。
+実Discordへのコマンド同期はToken設定後に手動確認する。

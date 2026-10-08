@@ -4,6 +4,27 @@ Knowledge Gateway / Discord Archive MCP の設定・起動・移行・バック�
 [運用ガイド](docs/knowledge-gateway.md) を参照してください。
 Archiveは初期設定では無効で、明示Allowlistを設定したTrust Zoneだけで収集します。
 
+### Discord Archiveを試す（Windows）
+
+初回だけ `config/personal.example.json` を `config/personal.local.json` にコピーし、
+`.env` に `DISCORD_TOKEN` と `NOCORD_CONFIG=config/personal.local.json` を設定します。
+依存関係を導入した後、`.venv\Scripts\python.exe main.py` で起動してください。
+
+サーバー管理権限を持つユーザーがDiscordで次のコマンドを実行すると、IDを手入力せず保存対象を設定できます。
+
+| コマンド | 使い方 |
+|---|---|
+| `/archive register` | 今いるチャンネル／threadを保存対象に登録 |
+| `/archive register channel:対象` | チャンネルを選択して登録 |
+| `/archive unregister` | 今いる場所の保存許可を外す（既存原文は物理削除しない） |
+| `/archive list` | このサーバーの登録済み保存対象を表示 |
+| `/rag sync_server` | 登録対象の過去ログを、設定済みBackfill範囲で同期 |
+
+初期Allowlistは空で、登録前のチャンネルは収集しません。公開threadは親チャンネルの許可を継承します。
+private threadはそのthread内で別途登録してください。登録設定はZone別のローカルファイルへ保存し、Git管理しません。
+Bot再起動後にコマンドが登録されます。グローバルコマンドはDiscord側への反映に時間がかかる場合があります。
+保存済みログについて質問するには `@Bot 質問` または `/chat text:質問` を使います（回答生成はLM Studioが必要）。
+
 Discord / Slack / HTTP API に対応したマルチインターフェース AI チャットボット。  
 LM Studio の OpenAI 互換 API をバックエンドに、RAG（検索拡張生成）ベースの専属 Q&A エージェントとして利用できます。
 

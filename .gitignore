@@ -3,6 +3,7 @@
 !.env.example
 config/*.local.json
 data/
+*.allowlist.json
 *.sqlite
 *.sqlite-*
 *.db

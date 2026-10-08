@@ -22,6 +22,7 @@ class ArchivePolicy:
             raise ValueError('Invalid trust zone name')
         self.include_bots = config.get('include_bots', False) is True
         self.allow_guilds = config.get('allow_guilds', {})
+        self.denials = config.get('_registration_denials', {})
         if not isinstance(self.allow_guilds, dict):
             raise ValueError('allow_guilds must be a mapping')
         for guild, entry in self.allow_guilds.items():
@@ -37,6 +38,9 @@ class ArchivePolicy:
             return False
         channels = self.allow_guilds.get(str(guild_id), {}).get('channels', [])
         allowed = {str(c) for c in channels}
+        denied = set(self.denials.get(str(guild_id), []))
+        if str(thread_id if thread_id is not None else channel_id) in denied:
+            return False
         if private:
             return thread_id is not None and str(thread_id) in allowed
         return str(channel_id) in allowed or (thread_id is not None and str(thread_id) in allowed)
@@ -50,9 +54,16 @@ class ArchivePolicy:
                  for c in data.get('channels', [])] if self.enabled else []
         if not pairs:
             return '0', []
-        return '(' + ' OR '.join(
+        sql = '(' + ' OR '.join(
             f'({alias}.guild_id=? AND (({alias}.channel_id=? AND {alias}.is_private_thread=0) '
-            f'OR {alias}.thread_id=?))' for _ in pairs) + ')', [v for g,c in pairs for v in (g,c,c)]
+            f'OR {alias}.thread_id=?))' for _ in pairs) + ')'
+        params = [v for g,c in pairs for v in (g,c,c)]
+        for guild, channels in self.denials.items():
+            for channel in channels:
+                sql += (f" AND NOT ({alias}.guild_id=? AND (COALESCE({alias}.thread_id,'')=? OR "
+                        f'({alias}.thread_id IS NULL AND {alias}.channel_id=?)))')
+                params.extend([str(guild), str(channel), str(channel)])
+        return sql, params
 
     def database_path(self):
         path = Path(os.getenv('NOCORD_ARCHIVE_PATH', self.config.get(
@@ -61,4 +72,8 @@ class ArchivePolicy:
 
 
 def load_policy():
-    return ArchivePolicy(load_app_config().get('discord_archive', {}))
+    from core.archive_allowlist import effective_config
+    base = ArchivePolicy(load_app_config().get('discord_archive', {}))
+    if not base.enabled:
+        return base
+    return ArchivePolicy(effective_config(base))

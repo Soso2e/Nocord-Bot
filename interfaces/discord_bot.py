@@ -1528,6 +1528,8 @@ bot.tree.add_command(db_group)
 bot.tree.add_command(memory_group)
 bot.tree.add_command(rag_group)
 bot.tree.add_command(notion_group)
+from interfaces.archive_commands import archive_group
+bot.tree.add_command(archive_group)
 
 
 def run(token: str):
