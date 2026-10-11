@@ -333,6 +333,28 @@ curl http://localhost:8000/status -H "X-API-Key: your_key"
 
 LM Studio を使う場合は `provider: "openai"` を指定します。
 
+### NVIDIA PAIR 経由で接続する場合
+
+ボットを動かすPCでもPAIRを起動し、推論用PCとペアリングしてください。
+PAIRの **Endpoints** に表示されるローカルURLを `base_url` に設定します
+（LM Studio用の標準値は `http://127.0.0.1:1234`）。
+このボットは `/v1/chat/completions` を付加するので、設定値に `/v1` は含めません。
+`query_llm.base_url` も同じ接続先に変更してください。
+
+別PCの `http://IP:1234` へ直接接続すると、PAIRは `403 loopback-only` を返します。
+ローカルのPAIRがノード間の認証・転送を担当するので、ボットにmTLS証明書を設定する必要はありません。
+設定変更後はボットを再起動してください。
+
+```powershell
+curl.exe --noproxy "*" http://127.0.0.1:1234/v1/models
+```
+
+一覧のモデルIDを `model` と `query_llm.model` に設定します。
+対象ノードでエンジンを起動し、モデルを用意してください。
+PAIRの **Overview → Jobs → Ran on / Running on** で実際の推論先を確認できます。
+PAIRはリクエスト単位でノードを選び、複数PCのVRAMを合算しません。
+詳しくは [NVIDIA公式ガイド](https://docs.nvidia.com/local-ai/nvpair/getting-started/) を参照してください。
+
 ### `databases/{db_name}/config.json` — DB（人格）設定
 
 ```json
