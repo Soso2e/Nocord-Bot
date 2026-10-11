@@ -46,6 +46,13 @@ Windows Task Schedulerでは、タスクの作業ディレクトリをこのchec
 タスクの多重起動を無効にし、ログオン時起動・失敗時再起動を設定してください。
 停止はタスク終了、手動起動ならCtrl+Cです。再起動時にcheckpoint以後を補完します。
 
+2026-10-11以後は `scripts/install_autostart.ps1 -StartNow` で現在のユーザーのログオン起動を登録できます。
+タスク名は `NocordBot`、起動先はvenvの `pythonw.exe scripts/run_bot.py`、ユーザー権限はLimited/Interactiveです。
+障害時は1分ごとに最大999回再試行します。スリープ／ログオフ中は実行できません。
+プロセスロックで二重起動を防ぎ、Discord等のinterface thread停止はプロセス失敗として検出します。
+ログはローカル `data/runtime/nocord.log` にrotate保存し、`.env`／環境変数のToken等をマスクします。
+手動設定では同じrunnerを起動してください。DB・ログ・ロックファイルはGit対象外です。
+
 ## School deployment
 
 学校のマシン・学校用Bot Token・学校用checkoutを使い、`config/school.example.json` を

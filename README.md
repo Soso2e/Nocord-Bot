@@ -1,5 +1,9 @@
 # Nocord - Bot
 
+`Server/Nocord`（NotionタスクをDiscordへWebhook通知する別ツール）とは別プロジェクトです。
+このリポジトリ／フォルダー `Server/Nocord_bot` が、Discord Q&A・ログ保存・Knowledge Gateway MCPを担当します。
+Discord BotのTokenは **このフォルダーの `.env`** の `DISCORD_TOKEN` に設定してください。
+
 Knowledge Gateway / Discord Archive MCP の設定・起動・移行・バックアップは
 [運用ガイド](docs/knowledge-gateway.md) を参照してください。
 Archiveは初期設定では無効で、明示Allowlistを設定したTrust Zoneだけで収集します。
@@ -24,6 +28,31 @@ Archiveは初期設定では無効で、明示Allowlistを設定したTrust Zone
 private threadはそのthread内で別途登録してください。登録設定はZone別のローカルファイルへ保存し、Git管理しません。
 Bot再起動後にコマンドが登録されます。グローバルコマンドはDiscord側への反映に時間がかかる場合があります。
 保存済みログについて質問するには `@Bot 質問` または `/chat text:質問` を使います（回答生成はLM Studioが必要）。
+
+### Windows自動起動
+
+以下を一度実行すると、現在のWindowsユーザーのログオン時に非表示で起動するタスク `NocordBot` を登録します。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\install_autostart.ps1 -StartNow
+```
+
+タスクは1分間隔の障害再起動、実行時間制限なし、二重起動防止を設定します。
+起動ログは `data/runtime/nocord.log`（1MB × 最大4ファイル、環境変数のToken等を伏せて出力）です。
+Token未設定・誤Token・Message Content Intent未設定の場合は接続できないので、設定を修正してください。
+PCがスリープ／停止中、ログオン前、ユーザーがログアウトした後は動作しません。
+
+```powershell
+Get-ScheduledTask -TaskName NocordBot       # タスクの状態
+Get-ScheduledTaskInfo -TaskName NocordBot   # 前回実行結果（0:正常、1:起動失敗）
+Start-ScheduledTask -TaskName NocordBot     # 手動開始
+Stop-ScheduledTask -TaskName NocordBot      # 現在の実行を停止
+Disable-ScheduledTask -TaskName NocordBot   # 自動起動を無効にする
+Enable-ScheduledTask -TaskName NocordBot    # 自動起動を再び有効にする
+```
+
+起動ファイル・作業ディレクトリは登録時のcheckoutに固定されます。フォルダー移動後は登録スクリプトを再実行してください。
+手動起動の `python main.py` にも同じプロセスロックが適用され、自動起動と重複しません。
 
 Discord / Slack / HTTP API に対応したマルチインターフェース AI チャットボット。  
 LM Studio の OpenAI 互換 API をバックエンドに、RAG（検索拡張生成）ベースの専属 Q&A エージェントとして利用できます。

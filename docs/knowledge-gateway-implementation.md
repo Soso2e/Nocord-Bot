@@ -105,3 +105,13 @@ Zone別ローカル `*.allowlist.json` に永続化し、configのID指定と合
 `tests/test_archive_registration.py`。README・運用ガイドも更新。
 追加後の検証: **50 tests成功**、compileall、pip check、diff check成功。
 実Discordへのコマンド同期はToken設定後に手動確認する。
+
+## 2026-10-11: Windows起動・自動起動
+
+`scripts/run_bot.py` と `scripts/install_autostart.ps1` を追加し、現在のユーザーのログオン時に
+非表示で起動するTask Scheduler構成を用意した。実行時間制限なし、障害時1分ごとに再起動、
+同一checkoutの手動／タスク二重起動をOSロックで防ぐ。停止したinterface threadをmainが検出する。
+Token等を伏せたrotateログをローカル `data/runtime/nocord.log` に保存する。
+起動・ログ秘匿・プロセスロックの追加後、**54 tests成功**、compileall、pip check、diff check成功。
+Task Schedulerの登録と起動経路を実機で確認した。実Discordへの接続完了は、正しいBot Token設定後に確認する。
+READMEに別プロジェクト `Server/Nocord`（Notion→Discord Webhook通知）との違いも記載した。
