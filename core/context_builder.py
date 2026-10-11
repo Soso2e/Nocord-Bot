@@ -27,28 +27,32 @@ def _load_db_config(db_name: str) -> dict:
         return json.load(f)
 
 
-def build_messages(db_name: str, session_id: str, user_input: str) -> list[dict]:
+def build_messages(db_name: str, session_id: str, user_input: str, *, archive_guild_id=None) -> list[dict]:
     cfg = _load_db_config(db_name)
     system_prompt = cfg.get("system_prompt", "You are a helpful assistant.")
     max_ctx = cfg.get("memory_policy", {}).get("max_context_messages", 20)
     rag_cfg = cfg.get("rag", {})
     rag_enabled = rag_cfg.get("enabled", False)
+    from core.gateway_config import load_policy
+    policy = load_policy()
+    archive_enabled = policy.enabled and policy.config.get('qa_enabled', False) and archive_guild_id is not None
 
     history = get_history(db_name, session_id, limit=max_ctx)
     memories = find_relevant_memories(db_name, user_input, limit=5)
 
-    if rag_enabled:
+    if rag_enabled or archive_enabled:
         system_prompt = system_prompt + _RAG_CONSTRAINT
 
     messages = [{"role": "system", "content": system_prompt}]
 
     # RAG knowledge (highest priority — placed before conversation memories)
-    if rag_enabled:
+    if rag_enabled or archive_enabled:
         try:
-            from core import rag_manager
+            from core.knowledge_search import search_knowledge
             k = rag_cfg.get("retrieval_k", 4)
             threshold = rag_cfg.get("score_threshold", 0.3)
-            rag_docs = rag_manager.search(db_name, user_input, k=k, score_threshold=threshold)
+            rag_docs = search_knowledge(db_name, user_input, k=k, score_threshold=threshold,
+                                       archive_guild_id=archive_guild_id, rag_enabled=rag_enabled)
             if rag_docs:
                 doc_sections = "\n---\n".join(
                     f"[出典: {d['source']}]\n{d['content']}" for d in rag_docs

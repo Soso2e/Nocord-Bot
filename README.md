@@ -1,5 +1,59 @@
 # Nocord - Bot
 
+`Server/Nocord`（NotionタスクをDiscordへWebhook通知する別ツール）とは別プロジェクトです。
+このリポジトリ／フォルダー `Server/Nocord_bot` が、Discord Q&A・ログ保存・Knowledge Gateway MCPを担当します。
+Discord BotのTokenは **このフォルダーの `.env`** の `DISCORD_TOKEN` に設定してください。
+
+Knowledge Gateway / Discord Archive MCP の設定・起動・移行・バックアップは
+[運用ガイド](docs/knowledge-gateway.md) を参照してください。
+Archiveは初期設定では無効で、明示Allowlistを設定したTrust Zoneだけで収集します。
+
+### Discord Archiveを試す（Windows）
+
+初回だけ `config/personal.example.json` を `config/personal.local.json` にコピーし、
+`.env` に `DISCORD_TOKEN` と `NOCORD_CONFIG=config/personal.local.json` を設定します。
+依存関係を導入した後、`.venv\Scripts\python.exe main.py` で起動してください。
+
+サーバー管理権限を持つユーザーがDiscordで次のコマンドを実行すると、IDを手入力せず保存対象を設定できます。
+
+| コマンド | 使い方 |
+|---|---|
+| `/archive register` | 今いるチャンネル／threadを保存対象に登録 |
+| `/archive register channel:対象` | チャンネルを選択して登録 |
+| `/archive unregister` | 今いる場所の保存許可を外す（既存原文は物理削除しない） |
+| `/archive list` | このサーバーの登録済み保存対象を表示 |
+| `/rag sync_server` | 登録対象の過去ログを、設定済みBackfill範囲で同期 |
+
+初期Allowlistは空で、登録前のチャンネルは収集しません。公開threadは親チャンネルの許可を継承します。
+private threadはそのthread内で別途登録してください。登録設定はZone別のローカルファイルへ保存し、Git管理しません。
+Bot再起動後にコマンドが登録されます。グローバルコマンドはDiscord側への反映に時間がかかる場合があります。
+保存済みログについて質問するには `@Bot 質問` または `/chat text:質問` を使います（回答生成はLM Studioが必要）。
+
+### Windows自動起動
+
+以下を一度実行すると、現在のWindowsユーザーのログオン時に非表示で起動するタスク `NocordBot` を登録します。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\install_autostart.ps1 -StartNow
+```
+
+タスクは1分間隔の障害再起動、実行時間制限なし、二重起動防止を設定します。
+起動ログは `data/runtime/nocord.log`（1MB × 最大4ファイル、環境変数のToken等を伏せて出力）です。
+Token未設定・誤Token・Message Content Intent未設定の場合は接続できないので、設定を修正してください。
+PCがスリープ／停止中、ログオン前、ユーザーがログアウトした後は動作しません。
+
+```powershell
+Get-ScheduledTask -TaskName NocordBot       # タスクの状態
+Get-ScheduledTaskInfo -TaskName NocordBot   # 前回実行結果（0:正常、1:起動失敗）
+Start-ScheduledTask -TaskName NocordBot     # 手動開始
+Stop-ScheduledTask -TaskName NocordBot      # 現在の実行を停止
+Disable-ScheduledTask -TaskName NocordBot   # 自動起動を無効にする
+Enable-ScheduledTask -TaskName NocordBot    # 自動起動を再び有効にする
+```
+
+起動ファイル・作業ディレクトリは登録時のcheckoutに固定されます。フォルダー移動後は登録スクリプトを再実行してください。
+手動起動の `python main.py` にも同じプロセスロックが適用され、自動起動と重複しません。
+
 Discord / Slack / HTTP API に対応したマルチインターフェース AI チャットボット。  
 LM Studio の OpenAI 互換 API をバックエンドに、RAG（検索拡張生成）ベースの専属 Q&A エージェントとして利用できます。
 
@@ -278,6 +332,28 @@ curl http://localhost:8000/status -H "X-API-Key: your_key"
 ```
 
 LM Studio を使う場合は `provider: "openai"` を指定します。
+
+### NVIDIA PAIR 経由で接続する場合
+
+ボットを動かすPCでもPAIRを起動し、推論用PCとペアリングしてください。
+PAIRの **Endpoints** に表示されるローカルURLを `base_url` に設定します
+（LM Studio用の標準値は `http://127.0.0.1:1234`）。
+このボットは `/v1/chat/completions` を付加するので、設定値に `/v1` は含めません。
+`query_llm.base_url` も同じ接続先に変更してください。
+
+別PCの `http://IP:1234` へ直接接続すると、PAIRは `403 loopback-only` を返します。
+ローカルのPAIRがノード間の認証・転送を担当するので、ボットにmTLS証明書を設定する必要はありません。
+設定変更後はボットを再起動してください。
+
+```powershell
+curl.exe --noproxy "*" http://127.0.0.1:1234/v1/models
+```
+
+一覧のモデルIDを `model` と `query_llm.model` に設定します。
+対象ノードでエンジンを起動し、モデルを用意してください。
+PAIRの **Overview → Jobs → Ran on / Running on** で実際の推論先を確認できます。
+PAIRはリクエスト単位でノードを選び、複数PCのVRAMを合算しません。
+詳しくは [NVIDIA公式ガイド](https://docs.nvidia.com/local-ai/nvpair/getting-started/) を参照してください。
 
 ### `databases/{db_name}/config.json` — DB（人格）設定
 

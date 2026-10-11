@@ -109,3 +109,20 @@ async def status():
         "base_url": llm["base_url"],
         "available_dbs": chat_controller.available_dbs(),
     }
+
+
+@app.get('/archive/status', dependencies=[Depends(_verify_key)])
+async def archive_status():
+    # Archive diagnostics remain denied when the legacy development API has no key.
+    if not os.getenv('HTTP_API_KEY'):
+        raise HTTPException(status_code=403, detail='Archive health requires HTTP_API_KEY')
+    from core.discord_archive_sync import get_ingestor
+    from core.archive_operations import archive_status as status_snapshot
+    import asyncio
+    try:
+        ingestor = get_ingestor()
+        if not ingestor:
+            return {'enabled': False}
+        return await asyncio.to_thread(status_snapshot, ingestor.archive, ingestor.policy)
+    except Exception:
+        raise HTTPException(status_code=503, detail='Archive health unavailable') from None

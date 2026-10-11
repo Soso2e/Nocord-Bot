@@ -1,3 +1,4 @@
+import asyncio
 import json
 import inspect
 import re
@@ -415,12 +416,13 @@ async def _process_with_notion(
     cfg: dict,
     notion_cfg: dict,
     progress: ProgressCallback | None = None,
+    archive_guild_id: str | None = None,
 ) -> str:
     """2-stage LLM flow: LLM① synthesizes RAG+Notion info, LLM② generates the reply."""
     from core import notion_client, notion_rag_sync
     from core.context_builder import build_messages_with_synthesized_info
     from core.rag_manager import delete_by_source, ingest_text
-    from core.rag_manager import search as rag_search
+    from core.knowledge_search import search_knowledge as rag_search
 
     await _emit_progress(progress, "Notion連携を確認中...")
     api_key = notion_client.get_api_key(notion_cfg)
@@ -464,15 +466,17 @@ async def _process_with_notion(
     # RAG search after sync so newly indexed PDFs are included
     rag_docs: list[dict] = []
     rag_cfg = cfg.get("rag", {})
-    if rag_cfg.get("enabled", False):
+    if rag_cfg.get("enabled", False) or archive_guild_id is not None:
         await _emit_progress(progress, "RAGを検索中...")
         try:
             rag_query = search_queries[0] if search_queries else message
-            rag_docs = rag_search(
+            rag_docs = await asyncio.to_thread(rag_search,
                 db_name,
                 rag_query,
                 k=rag_cfg.get("retrieval_k", 4),
                 score_threshold=rag_cfg.get("score_threshold", 0.3),
+                archive_guild_id=archive_guild_id,
+                rag_enabled=rag_cfg.get("enabled", False),
             )
         except Exception:
             pass
@@ -499,7 +503,8 @@ async def _process_with_notion(
     # No external info found — fall back to the normal single-stage flow
     if not rag_docs and not notion_results:
         await _emit_progress(progress, "メモリを検索中...")
-        messages = build_messages(db_name, session_id, message)
+        messages = await asyncio.to_thread(build_messages, db_name, session_id, message,
+                                          archive_guild_id=archive_guild_id)
         await _emit_progress(progress, "回答を生成中...")
         return await _llm.chat(messages)
 
@@ -525,6 +530,8 @@ async def process(
     session_id: str,
     db_name: str = "general",
     progress: ProgressCallback | None = None,
+    *,
+    archive_guild_id: str | None = None,
 ) -> str:
     init_db(db_name)
     cfg = _load_db_config(db_name)
@@ -532,14 +539,16 @@ async def process(
 
     if notion_cfg.get("enabled", False):
         try:
-            reply = await _process_with_notion(message, session_id, db_name, cfg, notion_cfg, progress)
+            reply = await _process_with_notion(message, session_id, db_name, cfg, notion_cfg,
+                                             progress, archive_guild_id)
         except Exception as exc:
             print(f"[Notion] Integration error, falling back to standard flow: {exc}")
             await _emit_progress(progress, f"Notion検索をスキップ: {exc}")
             if cfg.get("rag", {}).get("enabled", False):
                 await _emit_progress(progress, "RAGを検索中...")
             await _emit_progress(progress, "メモリを検索中...")
-            messages = build_messages(db_name, session_id, message)
+            messages = await asyncio.to_thread(build_messages, db_name, session_id, message,
+                                              archive_guild_id=archive_guild_id)
             await _emit_progress(progress, "回答を生成中...")
             reply = await _llm.chat(messages)
     else:
@@ -547,7 +556,8 @@ async def process(
         if cfg.get("rag", {}).get("enabled", False):
             await _emit_progress(progress, "RAGを検索中...")
         await _emit_progress(progress, "メモリを検索中...")
-        messages = build_messages(db_name, session_id, message)
+        messages = await asyncio.to_thread(build_messages, db_name, session_id, message,
+                                          archive_guild_id=archive_guild_id)
         await _emit_progress(progress, "回答を生成中...")
         reply = await _llm.chat(messages)
 

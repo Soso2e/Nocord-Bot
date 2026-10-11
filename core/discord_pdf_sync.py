@@ -139,8 +139,12 @@ async def sync_guild_pdfs(
     pdf_queue: list[tuple[Any, str]] = []
     errors: list[str] = []
     me = getattr(guild, "me", None)
+    from core.gateway_config import load_policy
+    archive_policy = load_policy()
 
     for channel in getattr(guild, "text_channels", ()):
+        if archive_policy.enabled and not archive_policy.allows(guild.id, channel.id):
+            continue
         try:
             if me is not None:
                 permissions = channel.permissions_for(me)

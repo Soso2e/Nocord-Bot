@@ -34,8 +34,8 @@ _background_tasks: set[asyncio.Task] = set()
 
 def _load_app_config() -> dict:
     try:
-        with open(APP_CONFIG_PATH, encoding="utf-8") as f:
-            return json.load(f)
+        from core.gateway_config import load_app_config
+        return load_app_config()
     except Exception:
         return {}
 
@@ -225,6 +225,12 @@ async def _sync_guild_to_rag(
     after: datetime.datetime | None = None,
 ) -> dict:
     """Scan all accessible text channels (and threads) and ingest into RAG."""
+    from core.discord_archive_sync import get_ingestor
+    ingestor = get_ingestor()
+    if ingestor:
+        from core.archive_reconcile import ArchiveReconciler
+        result = await ArchiveReconciler(ingestor).run([guild])
+        return dict(result, total_chunks=0, archive_mode=True)
     total_chunks = 0
     channels_done = 0
     errors: list[str] = []
@@ -341,6 +347,8 @@ notion_group = app_commands.Group(name="notion", description="Notion連携の確
 @tasks.loop(time=datetime.time(hour=0, minute=0, tzinfo=datetime.timezone.utc))
 async def _daily_discord_sync() -> None:
     """Nightly auto-sync (00:00 UTC = 09:00 JST) for guilds with auto_sync_enabled."""
+    from core.archive_reconcile import reconcile
+    await reconcile(bot)
     for guild in bot.guilds:
         sync_state = get_guild_sync_state(guild.id)
         if not sync_state.get("auto_sync_enabled"):
@@ -365,8 +373,18 @@ async def _daily_discord_sync() -> None:
             print(f"[AutoSync] Guild {guild.id} ({guild.name}) failed: {exc}")
 
 
+@tasks.loop(seconds=60)
+async def _archive_index_worker():
+    from core.archive_operations import index_once
+    await asyncio.to_thread(index_once)
+
+
 @bot.event
 async def on_ready():
+    from core.archive_reconcile import reconcile
+    _track_background_task(asyncio.create_task(reconcile(bot)))
+    if not _archive_index_worker.is_running():
+        _archive_index_worker.start()
     await _sync_slash_commands()
     print(f"[Discord] Logged in as {bot.user} (id={bot.user.id})")
     if not _daily_discord_sync.is_running():
@@ -375,6 +393,8 @@ async def on_ready():
 
 @bot.event
 async def on_message(message: discord.Message):
+    from core.discord_archive_sync import dispatch
+    await dispatch('create', message)
     if message.author.bot:
         return
 
@@ -402,6 +422,7 @@ async def on_message(message: discord.Message):
                         _session(message.channel.id),
                         _db(message.guild.id if message.guild else None),
                         progress=progress,
+                        archive_guild_id=str(message.guild.id) if message.guild else None,
                     )
                 except RuntimeError as exc:
                     if capture_task is not None:
@@ -421,6 +442,24 @@ async def on_message(message: discord.Message):
             return
 
     await bot.process_commands(message)
+
+
+@bot.event
+async def on_raw_message_edit(payload):
+    from core.discord_archive_sync import dispatch
+    await dispatch('update', payload, bot)
+
+
+@bot.event
+async def on_raw_message_delete(payload):
+    from core.discord_archive_sync import dispatch
+    await dispatch('delete', payload, bot)
+
+
+@bot.event
+async def on_raw_bulk_message_delete(payload):
+    from core.discord_archive_sync import dispatch
+    await dispatch('delete', payload, bot)
 
 
 @bot.command(name="chat")
@@ -443,6 +482,7 @@ async def cmd_chat(ctx: commands.Context, *, text: str):
                 _session(ctx.channel.id),
                 _db(ctx.guild.id if ctx.guild else None),
                 progress=progress,
+                archive_guild_id=str(ctx.guild.id) if ctx.guild else None,
             )
         except RuntimeError as exc:
             if capture_task is not None:
@@ -493,6 +533,7 @@ async def slash_chat(interaction: discord.Interaction, text: str):
             _session(interaction.channel.id),
             _db(interaction.guild.id if interaction.guild else None),
             progress=progress,
+            archive_guild_id=str(interaction.guild.id) if interaction.guild else None,
         )
     except RuntimeError as exc:
         if capture_task is not None:
@@ -1487,6 +1528,8 @@ bot.tree.add_command(db_group)
 bot.tree.add_command(memory_group)
 bot.tree.add_command(rag_group)
 bot.tree.add_command(notion_group)
+from interfaces.archive_commands import archive_group
+bot.tree.add_command(archive_group)
 
 
 def run(token: str):
