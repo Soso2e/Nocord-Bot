@@ -4,6 +4,7 @@
 config/*.local.json
 data/
 *.allowlist.json
+*.reply-channels.json
 *.sqlite
 *.sqlite-*
 *.db

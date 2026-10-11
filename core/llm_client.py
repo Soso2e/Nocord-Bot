@@ -25,12 +25,14 @@ class LLMClient:
         profile_cfg = cfg.get(self._profile, {})
         if self._profile == "query_llm" and not profile_cfg:
             profile_cfg = cfg.get("light_llm", {})
+        if self._profile == "routing_llm" and not profile_cfg:
+            raise ValueError('routing_llm must be explicitly configured; large-model fallback is disabled')
         if not isinstance(profile_cfg, dict) or not profile_cfg:
             return cfg
 
         merged = cfg.copy()
         merged.update(profile_cfg)
-        for key in ("query_llm", "light_llm"):
+        for key in ("query_llm", "light_llm", "routing_llm"):
             merged.pop(key, None)
         return merged
 
@@ -129,5 +131,8 @@ class LLMClient:
             "messages": messages,
             "temperature": opts.get("temperature", 0.7),
         }
+        for key in ('max_tokens', 'stop', 'top_p', 'seed', 'chat_template_kwargs', 'response_format'):
+            if key in opts:
+                payload[key] = opts[key]
         data = await self._post_json(url, payload, headers=headers)
         return data["choices"][0]["message"]["content"]

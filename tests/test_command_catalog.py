@@ -27,11 +27,11 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
             command = command.get_command(parts[1])
         await command.callback(self.interaction, **options)
 
-    def test_production_tree_has_only_thirteen_commands(self):
+    def test_production_tree_has_only_fourteen_commands(self):
         from interfaces.discord_bot import bot
         commands = list(bot.tree.walk_commands())
         leaves = {c.qualified_name for c in commands if isinstance(c, app_commands.Command)}
-        self.assertEqual(leaves, {'chat', 'status', 'archive', 'db', 'memory', 'rag config',
+        self.assertEqual(leaves, {'chat', 'status', 'archive', 'channel', 'db', 'memory', 'rag config',
                                  'rag add', 'rag sync', 'rag sources', 'rag delete',
                                  'notion config', 'notion db', 'notion search'})
 

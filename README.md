@@ -34,7 +34,7 @@ private threadはそのthread内で別途登録してください。登録設定
 Bot再起動後にコマンドが登録されます。グローバルコマンドはDiscord側への反映に時間がかかる場合があります。
 保存済みログについて質問するには `@Bot 質問` または `/chat text:質問` を使います（回答生成はLM Studioが必要）。
 
-### Discordコマンド一覧（13個）
+### Discordコマンド一覧（14個）
 
 操作は `action`、対象は `target` / `scope` で選びます。旧サブコマンドは登録しません。
 Bot再起動時のコマンド同期後に新しい構成が反映されます。
@@ -42,6 +42,7 @@ Bot再起動時のコマンド同期後に新しい構成が反映されます�
 | コマンド | 操作・オプション |
 |---|---|
 | `/chat` | `text` を指定して質問 |
+| `/channel` | `enabled:true` でメンションなし応答を有効化、`false` で解除。省略時は設定一覧。`channel` は任意 |
 | `/status` | `target`: bot（既定）/ db / rag / notion / archive |
 | `/archive` | `action`: list（既定）/ register / unregister。`scope`: channel（既定）/ server。`channel` は任意 |
 | `/db` | `action`: list（既定）/ create / use。create・use は `db_name` と `password` が必須 |
@@ -58,6 +59,47 @@ Bot再起動時のコマンド同期後に新しい構成が反映されます�
 例: サーバー全体の登録は `/archive action:register scope:server`、過去ログの同期は `/rag sync`。
 現在のDBは `/status target:db`、知識検索の有効化は `/rag config action:enable` です。
 管理操作の権限チェックと削除の確認画面は従来どおり適用されます。
+
+### メンションなし応答
+
+サーバー管理者が対象チャンネルで `/channel enabled:true` を実行すると、Botがメンションなしの投稿も判定します。
+`/channel enabled:false` で解除、`/channel` で現在の場所の状態とサーバー内の有効チャンネルを確認できます。
+`channel` オプションで対象を選べます。チャンネルとスレッドは個別指定で、親の設定をスレッドに継承しません。
+Botには閲覧・履歴取得・投稿権限とMessage Content Intentが必要です。
+
+処理は「対象確認 → 受信済みの直近10分・最大4件を参照 → 返信要否判定 → 回答生成」です。
+判定時はDiscordの履歴取得APIを呼びません。起動後に対象チャンネルの4件を一度取得し、以後は受信イベントで更新します。
+初期取得前や取得失敗時は手元にある会話だけで判定します。キャッシュは最大128チャンネルで、各投稿の全文は保持しません。
+判定用の履歴本文は各128文字、最新投稿は256文字までに制限します。発言者名や不要なメタデータは判定プロンプトに追加しません。
+判定には `config/llm.json` の独立した `routing_llm` を使い、通常・検索用モデルへフォールバックしません。
+このPCではQwen3-0.6B Q8_0をLM StudioのローカルAPI（`127.0.0.1:1235`）に常駐させています。
+判定出力は短いJSONのみ、生成上限16トークン、思考モードを無効化し、リトライしません。
+Botへの質問・依頼・追加質問だけを返信対象とし、人同士の会話、他の人への返信、お礼だけ、Bot・Webhookの投稿、
+コマンド、全員／ロール宛ての投稿は見送ります。宛先が曖昧な場合も見送るため、確実に回答を求めるときはメンションまたは `/chat` を使ってください。
+独立した明確な質問・依頼（例:「このサーバーについて要約して」）は、他の人宛てでなければBotへの依頼として扱います。
+判定は返信先確認・モデルへの通信も含め1秒で打ち切り、不正なモデル出力や障害時は返信しません。
+お礼・了解だけの定型投稿は軽いルールで見送ります。判定は他の投稿の回答生成が終わるのを待たずに実行します。
+1秒は返信要否の判定に対する制限で、回答本文の生成時間は別です。
+実行ログにはメッセージID・判定結果・処理時間を記録し、本文は記録しません。
+
+返信対象の投稿では、直近の会話を回答生成にも渡します。返信しない投稿はBot会話履歴・長期記憶に追加しません。
+Discord Archiveのログ保存は独立しており、既存のAllowlistに従います。`/channel` はArchive登録を変更しません。
+設定はTrust Zone別のDBと同じ場所の `*.reply-channels.json` に原子的に保存され、再起動後も維持されます。
+同じチャンネルの回答生成は順番に処理し、生成中に無効化された場合は自動返信を送信しません。
+
+判定モデルの準備（このPCのLM Studio）:
+
+```powershell
+lms get https://huggingface.co/Qwen/Qwen3-0.6B-GGUF --gguf -y
+lms server start --port 1235 --bind 127.0.0.1
+lms load qwen3-0.6b --identifier nocord-router --gpu max --context-length 2048 -y
+```
+
+`managed_lms` を設定した起動runnerは、Bot起動前にローカルサーバー・モデルを準備してウォームアップします。
+ダウンロードは起動時に行いません。ロード失敗時も通常のメンション応答は起動します。
+日本語Windowsユーザー名での一時ファイル問題を避けるため、起動するLM Studio daemonにはcheckout内の
+`data/runtime/router-temp` を一時ディレクトリとして渡します。既に別の環境でdaemonが動いている場合はその環境を引き継ぎます。
+実モデルの簡易検証は `python scripts/benchmark_reply_router.py` で実行できます（Discordに投稿しません）。
 
 ### Windows自動起動
 

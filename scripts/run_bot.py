@@ -58,6 +58,11 @@ def run():
             if not token or token.lower().startswith(('your_', '取得した', 'コピーした')):
                 logger.error('DISCORD_TOKEN is not configured; waiting for local .env update.')
                 return 1
+            from core.router_runtime import prepare
+            try:
+                prepare(logger)
+            except Exception as exc:
+                logger.warning('Routing model startup failed (%s); unmentioned replies may be skipped.', type(exc).__name__)
             import main
             logger.info('Nocord starting')
             asyncio.run(main.main())

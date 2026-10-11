@@ -11,6 +11,37 @@
   "max_retries": 1,
   "retry_backoff_seconds": 2,
   "options": {},
+  "routing_llm": {
+    "provider": "openai",
+    "base_url": "http://127.0.0.1:1235",
+    "model": "nocord-router",
+    "api_key": "lm-studio",
+    "timeout": 1,
+    "connect_timeout": 0.2,
+    "read_timeout": 1,
+    "write_timeout": 0.2,
+    "pool_timeout": 0.2,
+    "max_retries": 0,
+    "managed_lms": {"model_key": "qwen3-0.6b", "context_length": 2048, "gpu": "max"},
+    "options": {
+      "temperature": 0,
+      "max_tokens": 16,
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "reply_decision",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {"reply": {"type": "boolean"}},
+            "required": ["reply"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "chat_template_kwargs": {"enable_thinking": false}
+    }
+  },
   "query_llm": {
     "provider": "openai",
     "base_url": "http://127.0.0.1:1234",

@@ -417,6 +417,7 @@ async def _process_with_notion(
     notion_cfg: dict,
     progress: ProgressCallback | None = None,
     archive_guild_id: str | None = None,
+    conversation_context: str | None = None,
 ) -> str:
     """2-stage LLM flow: LLM① synthesizes RAG+Notion info, LLM② generates the reply."""
     from core import notion_client, notion_rag_sync
@@ -504,7 +505,8 @@ async def _process_with_notion(
     if not rag_docs and not notion_results:
         await _emit_progress(progress, "メモリを検索中...")
         messages = await asyncio.to_thread(build_messages, db_name, session_id, message,
-                                          archive_guild_id=archive_guild_id)
+                                          archive_guild_id=archive_guild_id,
+                                          conversation_context=conversation_context)
         await _emit_progress(progress, "回答を生成中...")
         return await _llm.chat(messages)
 
@@ -515,7 +517,7 @@ async def _process_with_notion(
     # LLM② — generate the final user-facing reply
     await _emit_progress(progress, "メモリを検索中...")
     final_messages = build_messages_with_synthesized_info(
-        db_name, session_id, message, synthesized
+        db_name, session_id, message, synthesized, conversation_context=conversation_context
     )
     await _emit_progress(progress, "回答を生成中...")
     reply = await _llm.chat(final_messages)
@@ -532,6 +534,7 @@ async def process(
     progress: ProgressCallback | None = None,
     *,
     archive_guild_id: str | None = None,
+    conversation_context: str | None = None,
 ) -> str:
     init_db(db_name)
     cfg = _load_db_config(db_name)
@@ -540,7 +543,7 @@ async def process(
     if notion_cfg.get("enabled", False):
         try:
             reply = await _process_with_notion(message, session_id, db_name, cfg, notion_cfg,
-                                             progress, archive_guild_id)
+                                             progress, archive_guild_id, conversation_context)
         except Exception as exc:
             print(f"[Notion] Integration error, falling back to standard flow: {exc}")
             await _emit_progress(progress, f"Notion検索をスキップ: {exc}")
@@ -548,7 +551,8 @@ async def process(
                 await _emit_progress(progress, "RAGを検索中...")
             await _emit_progress(progress, "メモリを検索中...")
             messages = await asyncio.to_thread(build_messages, db_name, session_id, message,
-                                              archive_guild_id=archive_guild_id)
+                                              archive_guild_id=archive_guild_id,
+                                              conversation_context=conversation_context)
             await _emit_progress(progress, "回答を生成中...")
             reply = await _llm.chat(messages)
     else:
@@ -557,7 +561,8 @@ async def process(
             await _emit_progress(progress, "RAGを検索中...")
         await _emit_progress(progress, "メモリを検索中...")
         messages = await asyncio.to_thread(build_messages, db_name, session_id, message,
-                                          archive_guild_id=archive_guild_id)
+                                          archive_guild_id=archive_guild_id,
+                                          conversation_context=conversation_context)
         await _emit_progress(progress, "回答を生成中...")
         reply = await _llm.chat(messages)
 

@@ -4,7 +4,7 @@ from typing import Literal
 import discord
 from discord import app_commands
 
-from interfaces import archive_commands
+from interfaces import archive_commands, channel_commands
 
 
 async def validate(interaction, allowed, **options):
@@ -21,9 +21,17 @@ async def missing(interaction, *names):
 
 
 def install(tree, handlers):
-    """Expose thirteen commands; never register the old aliases."""
+    """Expose the compact command catalog; never register the old aliases."""
     async def call(name, interaction, *args, **kwargs):
         await handlers[name](interaction, *args, **kwargs)
+
+    @tree.command(name='channel', description='メンションなしで応答するチャンネルを設定・確認する')
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(enabled='true=有効 / false=無効 / 省略=設定確認', channel='対象チャンネルまたはスレッド（省略時は現在の場所）')
+    async def channel(interaction: discord.Interaction, enabled: bool | None = None,
+                      channel: discord.TextChannel | discord.Thread | None = None):
+        await channel_commands.configure(interaction, enabled, channel)
 
     @tree.command(name='status', description='Bot・DB・知識検索・連携の状態を確認する')
     async def status(interaction: discord.Interaction,

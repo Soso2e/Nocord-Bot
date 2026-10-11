@@ -1,7 +1,9 @@
 import asyncio
 import datetime
 import json
+import logging
 from pathlib import Path
+from weakref import WeakValueDictionary
 
 import discord
 from discord import app_commands
@@ -11,6 +13,10 @@ from core import chat_controller
 from core.db_registry import get_guild_db, get_guild_sync_state, update_guild_sync_state
 from core.ingest_helpers import SUPPORTED_EXTENSIONS, fetch_url, read_bytes
 from interfaces.command_catalog import install as install_command_catalog
+from core import reply_channels, reply_router
+
+log = logging.getLogger(__name__)
+_reply_locks = WeakValueDictionary()
 
 _VALID_RAG_BACKENDS = ("chroma", "json")
 
@@ -383,78 +389,120 @@ async def on_ready():
     if not _archive_index_worker.is_running():
         _archive_index_worker.start()
     await _sync_slash_commands()
+    _track_background_task(asyncio.create_task(reply_router.prime_history(bot)))
     print(f"[Discord] Logged in as {bot.user} (id={bot.user.id})")
     if not _daily_discord_sync.is_running():
         _daily_discord_sync.start()
 
 
+async def _reply_to_message(message, text, *, conversation_context=None, automatic=False):
+    reply_started = asyncio.get_running_loop().time()
+    if automatic:
+        print(f'[AutoReply] message={message.id} phase=generating')
+    capture_task = None
+    if _should_capture_memory(text):
+        capture_task = asyncio.create_task(
+            _capture_channel_memories(message.channel, message.guild.id if message.guild else None,
+                                      str(message.author.id), source="discord_auto"))
+    try:
+        async with message.channel.typing():
+            progress = None if automatic else _DiscordProgressMessage(message.channel.send)
+            options = {'conversation_context': conversation_context} if conversation_context else {}
+            reply = await chat_controller.process(
+                text, _session(message.channel.id), _db(message.guild.id if message.guild else None),
+                progress=progress, archive_guild_id=str(message.guild.id) if message.guild else None,
+                **options)
+        if automatic:
+            print(f'[AutoReply] message={message.id} phase=generated '
+                  f'elapsed={asyncio.get_running_loop().time() - reply_started:.2f}s')
+        if automatic:
+            # A disable command can arrive while generation is in progress.
+            if not await asyncio.to_thread(reply_channels.is_enabled, message.guild.id, message.channel.id):
+                if capture_task is not None:
+                    capture_task.cancel()
+                return
+            await message.reply(reply, mention_author=False, allowed_mentions=discord.AllowedMentions.none())
+            print(f'[AutoReply] message={message.id} phase=sent')
+        else:
+            await message.reply(reply)
+    except Exception as exc:
+        if capture_task is not None:
+            capture_task.cancel()
+        if automatic:
+            log.warning('Automatic reply failed (%s)', type(exc).__name__)
+            return
+        if isinstance(exc, RuntimeError):
+            await message.reply(_llm_error_message(exc))
+            return
+        raise
+    if capture_task is not None:
+        _track_background_task(asyncio.create_task(_notify_memory_capture_result(
+            capture_task, lambda content: message.channel.send(content))))
+
+
 @bot.event
 async def on_message(message: discord.Message):
+    reply_router.observe(message)
     from core.discord_archive_sync import dispatch
     await dispatch('create', message)
-    if message.author.bot:
+    if message.author.bot or getattr(message, 'webhook_id', None):
+        return
+    # Prefix commands take their normal path, even in automatic-reply channels.
+    if message.content.lstrip().startswith(_PREFIX):
+        await bot.process_commands(message)
         return
 
-    if bot.user.mentioned_in(message) and not message.mention_everyone:
+    if bot.user and bot.user.mentioned_in(message) and not message.mention_everyone:
         text = message.content
         for mention in message.mentions:
             text = text.replace(f"<@{mention.id}>", "").replace(f"<@!{mention.id}>", "")
         text = text.strip()
         if text:
-            capture_task = None
-            if _should_capture_memory(text):
-                capture_task = asyncio.create_task(
-                    _capture_channel_memories(
-                        message.channel,
-                        message.guild.id if message.guild else None,
-                        str(message.author.id),
-                        source="discord_auto",
-                    )
-                )
-            async with message.channel.typing():
-                try:
-                    progress = _DiscordProgressMessage(message.channel.send)
-                    reply = await chat_controller.process(
-                        text,
-                        _session(message.channel.id),
-                        _db(message.guild.id if message.guild else None),
-                        progress=progress,
-                        archive_guild_id=str(message.guild.id) if message.guild else None,
-                    )
-                except RuntimeError as exc:
-                    if capture_task is not None:
-                        capture_task.cancel()
-                    await message.reply(_llm_error_message(exc))
-                    return
-            await message.reply(reply)
-            if capture_task is not None:
-                _track_background_task(
-                    asyncio.create_task(
-                        _notify_memory_capture_result(
-                            capture_task,
-                            lambda content: message.channel.send(content),
-                        )
-                    )
-                )
+            lock = _reply_locks.setdefault(message.channel.id, asyncio.Lock())
+            async with lock:
+                await _reply_to_message(message, text)
             return
 
+    bot_id = getattr(bot.user, 'id', None)
+    if bot_id is not None and reply_router.eligible(message, bot_id, _PREFIX):
+        try:
+            enabled = await asyncio.to_thread(reply_channels.is_enabled, message.guild.id, message.channel.id)
+            if enabled:
+                reply_router.cache_channel(message.guild.id, message.channel.id)
+                reply_router.observe(message)
+                # Classification must not wait behind a slow answer generation.
+                decision = await reply_router.decide(message, bot_id, _PREFIX)
+                if not decision.reply:
+                    return
+                lock = _reply_locks.setdefault(message.channel.id, asyncio.Lock())
+                async with lock:
+                    if not await asyncio.to_thread(reply_channels.is_enabled, message.guild.id, message.channel.id):
+                        return
+                    await _reply_to_message(message, message.content.strip(),
+                                            conversation_context=decision.context, automatic=True)
+                return
+        except Exception as exc:
+            log.warning('Automatic reply routing unavailable (%s)', type(exc).__name__)
     await bot.process_commands(message)
 
 
 @bot.event
 async def on_raw_message_edit(payload):
+    reply_router.forget_messages(payload.guild_id, payload.channel_id, [payload.message_id])
     from core.discord_archive_sync import dispatch
     await dispatch('update', payload, bot)
 
 
 @bot.event
 async def on_raw_message_delete(payload):
+    reply_router.forget_messages(payload.guild_id, payload.channel_id, [payload.message_id])
     from core.discord_archive_sync import dispatch
     await dispatch('delete', payload, bot)
 
 
 @bot.event
 async def on_raw_bulk_message_delete(payload):
+    reply_router.forget_messages(payload.guild_id, payload.channel_id, payload.message_ids)
     from core.discord_archive_sync import dispatch
     await dispatch('delete', payload, bot)
 
