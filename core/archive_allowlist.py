@@ -46,16 +46,25 @@ def effective_config(policy):
 
 
 def set_registration(policy, guild_id, channel_id, enabled):
+    set_registrations(policy, guild_id, [channel_id], enabled)
+
+
+def set_registrations(policy, guild_id, channel_ids, enabled):
+    """Publish a whole channel selection in one atomic update."""
     if not policy.enabled:
         raise ValueError('Archive must be enabled before registration')
-    guild_id, channel_id = str(guild_id), str(channel_id)
-    if not guild_id.isdigit() or not channel_id.isdigit() or type(enabled) is not bool:
+    guild_id = str(guild_id)
+    channel_ids = {str(channel_id) for channel_id in channel_ids}
+    if not guild_id.isdigit() or any(not c.isdigit() for c in channel_ids) or type(enabled) is not bool:
         raise ValueError('Registration requires guild/channel IDs and a boolean')
+    if not channel_ids:
+        return
     path = state_path(policy)
     path.parent.mkdir(parents=True, exist_ok=True)
     with _lock:
         state = read_state(policy)
-        state['guilds'].setdefault(guild_id, {})[channel_id] = enabled
+        entries = state['guilds'].setdefault(guild_id, {})
+        entries.update({channel_id: enabled for channel_id in channel_ids})
         # Publish a complete snapshot; readers never observe a partially written policy.
         descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix='.allowlist-', suffix='.tmp')
         try:
