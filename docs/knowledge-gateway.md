@@ -65,10 +65,16 @@ Trust Zone名はDB内にも固定され、別Zone名で同一DBを開くと失�
 
 ## Allowlist
 
-ID指定の代わりに、サーバー管理権限を持つユーザーが対象チャンネルで `/archive register` を実行できます。
-`channel` オプションならチャンネル選択から登録できます。解除は `/archive unregister`、確認は `/archive list` です。
+ID指定の代わりに、サーバー管理権限を持つユーザーが対象チャンネルで `/archive action:register` を実行できます。
+`channel` オプションならチャンネル選択から登録できます。解除は `/archive action:unregister`、確認は `/archive` です。
+サーバー全体は `/archive action:register scope:server` で、BotにView Channel / Read Message History権限のある
+現在のテキスト／フォーラムを一括登録します。新規チャンネルの追加後は再実行してください。
+個別拒否した公開threadの拒否は維持し、private threadは個別登録します。
+`/archive action:unregister scope:server` はconfigの許可・個別登録したthread・削除済みチャンネルも含め、
+このサーバーの保存許可をすべて解除します。原文は物理削除しません。
+`scope` の省略時は従来のチャンネル単位です。`scope:server` と `channel` は同時指定できません。
 起動設定でArchiveを有効化しておく必要があり、未登録のチャンネルはDefault Denyのままです。
-登録だけでは過去ログを読みません。初回Backfillを実行する場合は `/rag sync_server` を使います。
+登録だけでは過去ログを読みません。初回Backfillを実行する場合は `/rag sync` を使います。
 公開threadは親の許可を継承しますが、そのthreadでunregisterした場合は個別拒否が優先されます。
 親を解除しても明示登録した子threadは許可が残るため、必要なら子も解除してください。
 
@@ -116,7 +122,7 @@ Allowlistを削除した既存データも検索対象から外します。設�
 | `days` | 過去 `days` 日（既定30） |
 | `full` | 全history、明示指定時だけ |
 
-再起動／毎日09:00 JST／`/rag sync_server` でチャンネル別checkpoint以後を取得します。
+再起動／毎日09:00 JST／`/rag sync` でチャンネル別checkpoint以後を取得します。
 差分は上限なしで最後まで走査し、全書き込み・repair成功後にだけそのチャンネルのcheckpointを進めます。
 境界は1秒重ね、message_id upsertで重複を防ぎます。別チャンネルの失敗は他の同期を止めません。
 公開archived threadはページ上限を設けず列挙し、許可されたprivate threadはID指定で取得します。
@@ -146,7 +152,7 @@ schema v1→v2ではprivate-thread属性を追加し、既存threadは安全側�
 公開threadも再取得で可視性が確認されるまではthread IDの明示許可が必要です。未知の将来schemaは拒否します。
 Zone marker・checkpoint・FTS／Vectorテーブルは必要時に冪等に追加します。起動前にbackupを取ってください。
 
-Archive無効時は既存Discord直接RAG同期が動きます。有効時は `/rag sync_server` がArchiveの同期へ切り替わり、
+Archive無効時は既存Discord直接RAG同期が動きます。有効時は `/rag sync` がArchiveの同期へ切り替わり、
 旧 `discord:guild:channel...` ソースを新たにVector DBへ重複投入しません。コマンドの `mode` / `limit` /
 `incremental` の代わりにArchive設定とチャンネル別checkpointが適用されます。
 text部分の `total_chunks` は0で、Vector進捗はArchive healthに表示します。既存のPDF同期wrapperは維持し、
@@ -157,7 +163,7 @@ Archive有効時の自動PDF走査にもAllowlistを適用します。
 避けるためArchive有効中のQ&Aでは除外します。PDF／Notionソースはそのまま使います。
 30分ブロックは取得時に原文から再生成し、最大前後10件の文脈から関連ブロックを渡します。
 既存HTTP／SlackのQ&AへArchive原文を自動共有しません。これらの既存RAG／Q&Aは継続します。
-旧Vector DBの `discord:` ソースはbackup後に既存 `/rag trim` 等で削除できます。勝手に既存DBを消しません。
+旧Vector DBの `discord:` ソースはbackup後に既存 `/rag delete` 等で削除できます。勝手に既存DBを消しません。
 
 ## MCP connection
 

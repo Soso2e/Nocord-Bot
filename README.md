@@ -18,16 +18,46 @@ Archiveは初期設定では無効で、明示Allowlistを設定したTrust Zone
 
 | コマンド | 使い方 |
 |---|---|
-| `/archive register` | 今いるチャンネル／threadを保存対象に登録 |
-| `/archive register channel:対象` | チャンネルを選択して登録 |
-| `/archive unregister` | 今いる場所の保存許可を外す（既存原文は物理削除しない） |
-| `/archive list` | このサーバーの登録済み保存対象を表示 |
-| `/rag sync_server` | 登録対象の過去ログを、設定済みBackfill範囲で同期 |
+| `/archive action:register` | 今いるチャンネル／threadを保存対象に登録 |
+| `/archive action:register channel:対象` | チャンネルを選択して登録 |
+| `/archive action:register scope:server` | このサーバーの閲覧・履歴取得可能なテキスト／フォーラムを一括登録 |
+| `/archive action:unregister` | 今いる場所の保存許可を外す（既存原文は物理削除しない） |
+| `/archive action:unregister scope:server` | このサーバーの保存許可を一括解除（個別登録したthreadを含む） |
+| `/archive` | このサーバーの登録済み保存対象を表示 |
+| `/rag sync` | 登録対象の過去ログを、設定済みBackfill範囲で同期 |
 
 初期Allowlistは空で、登録前のチャンネルは収集しません。公開threadは親チャンネルの許可を継承します。
 private threadはそのthread内で別途登録してください。登録設定はZone別のローカルファイルへ保存し、Git管理しません。
+保存対象の管理は `/archive` に統合し、`action` で一覧・登録・解除を選択します。
+`scope:server` は実行したサーバーの現在のチャンネルを対象にします。追加チャンネルは再実行して登録してください。
+個別解除済みの公開threadは一括登録後も対象外です。`scope:server` と `channel` は同時指定できません。
 Bot再起動後にコマンドが登録されます。グローバルコマンドはDiscord側への反映に時間がかかる場合があります。
 保存済みログについて質問するには `@Bot 質問` または `/chat text:質問` を使います（回答生成はLM Studioが必要）。
+
+### Discordコマンド一覧（13個）
+
+操作は `action`、対象は `target` / `scope` で選びます。旧サブコマンドは登録しません。
+Bot再起動時のコマンド同期後に新しい構成が反映されます。
+
+| コマンド | 操作・オプション |
+|---|---|
+| `/chat` | `text` を指定して質問 |
+| `/status` | `target`: bot（既定）/ db / rag / notion / archive |
+| `/archive` | `action`: list（既定）/ register / unregister。`scope`: channel（既定）/ server。`channel` は任意 |
+| `/db` | `action`: list（既定）/ create / use。create・use は `db_name` と `password` が必須 |
+| `/memory` | `action`: list（既定）/ save / capture / optimize / delete / clear。save は `text`、delete は `memory_id` が必須。capture は `limit` 任意（10〜100、既定40）。clear は現在のチャンネルのBot会話履歴を消去 |
+| `/rag config` | `action`: status（既定）/ enable / disable / backend / auto_sync。backend は `backend:chroma` または `json`、auto_sync は `enabled` が必須 |
+| `/rag add` | `file` または `url` を指定。省略するとテキスト入力フォーム。file・url は `source` 任意 |
+| `/rag sync` | `target`: server（既定）/ channel。server は `mode`（all / pinned / threads）、`incremental` 任意。channel は `channel` 任意。`limit` は両方に使用可能（0=無制限、既定server=500・channel=1000） |
+| `/rag sources` | 知識ソースの一覧 |
+| `/rag delete` | `scope`: source（既定、選択画面）/ all（全削除の確認画面） |
+| `/notion config` | `action`: status（既定）/ enable / disable。enable は `api_key` が必須 |
+| `/notion db` | `action`: add / remove。add は `database_id` が必須。remove は選択画面 |
+| `/notion search` | `query` を指定して検索 |
+
+例: サーバー全体の登録は `/archive action:register scope:server`、過去ログの同期は `/rag sync`。
+現在のDBは `/status target:db`、知識検索の有効化は `/rag config action:enable` です。
+管理操作の権限チェックと削除の確認画面は従来どおり適用されます。
 
 ### Windows自動起動
 
@@ -137,7 +167,7 @@ databases/
     └── ...
 ```
 
-Discord では `/db create` で新しい DB を作り、`/db use` で切り替えます。
+Discord では `/db action:create` で新しい DB を作り、`/db action:use` で切り替えます。
 
 ---
 
@@ -225,20 +255,20 @@ python scripts/ingest.py --db general --file manual.pdf --source "製品マニ�
 
 | コマンド | 説明 |
 |---|---|
-| `/db list` | 利用可能な DB 一覧 |
-| `/db current` | 現在のサーバーの DB |
-| `/db create name:xxx password:xxx` | 新しい DB を作成 |
-| `/db use name:xxx password:xxx` | 既存の DB に切り替え |
+| `/db` | 利用可能な DB 一覧 |
+| `/status target:db` | 現在のサーバーの DB |
+| `/db action:create db_name:xxx password:xxx` | 新しい DB を作成 |
+| `/db action:use db_name:xxx password:xxx` | 既存の DB に切り替え |
 
 ### メモリ管理
 
 | コマンド | 説明 |
 |---|---|
-| `/memory save text:xxx` | 手動でメモリを保存 |
-| `/memory list` | 最近のメモリを表示 |
-| `/memory capture` | 会話履歴からメモリを自動抽出 |
-| `/memory optimize` | メモリを整理・重複排除 |
-| `/memory clear` | チャンネルの会話履歴をクリア |
+| `/memory action:save text:xxx` | 手動でメモリを保存 |
+| `/memory` | 最近のメモリを表示 |
+| `/memory action:capture` | 会話履歴からメモリを自動抽出 |
+| `/memory action:optimize` | メモリを整理・重複排除 |
+| `/memory action:clear` | チャンネルの会話履歴をクリア |
 
 ---
 

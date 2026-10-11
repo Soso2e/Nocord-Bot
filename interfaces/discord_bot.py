@@ -10,6 +10,7 @@ from discord.ext import commands, tasks
 from core import chat_controller
 from core.db_registry import get_guild_db, get_guild_sync_state, update_guild_sync_state
 from core.ingest_helpers import SUPPORTED_EXTENSIONS, fetch_url, read_bytes
+from interfaces.command_catalog import install as install_command_catalog
 
 _VALID_RAG_BACKENDS = ("chroma", "json")
 
@@ -338,10 +339,6 @@ async def _sync_slash_commands() -> None:
     _slash_synced = True
 
 
-db_group = app_commands.Group(name="db", description="このDiscordサーバーのメモリDBを管理する")
-memory_group = app_commands.Group(name="memory", description="このDiscordサーバーの長期記憶を管理する")
-rag_group = app_commands.Group(name="rag", description="現在のDBのRAG（知識検索）を管理する")
-notion_group = app_commands.Group(name="notion", description="Notion連携の確認・テストを行う")
 
 
 @tasks.loop(time=datetime.time(hour=0, minute=0, tzinfo=datetime.timezone.utc))
@@ -552,7 +549,6 @@ async def slash_chat(interaction: discord.Interaction, text: str):
         )
 
 
-@bot.tree.command(name="status", description="現在のDBとモデル設定を表示する")
 async def slash_status(interaction: discord.Interaction):
     await interaction.response.send_message(
         embed=_status_embed(interaction.guild.id if interaction.guild else None),
@@ -560,7 +556,6 @@ async def slash_status(interaction: discord.Interaction):
     )
 
 
-@db_group.command(name="list", description="このボットで使用できるDBの一覧を表示する")
 async def db_list(interaction: discord.Interaction):
     current = _db(interaction.guild.id if interaction.guild else None)
     dbs = chat_controller.available_dbs()
@@ -569,7 +564,6 @@ async def db_list(interaction: discord.Interaction):
     await interaction.response.send_message(content, ephemeral=True)
 
 
-@db_group.command(name="current", description="このDiscordサーバーが使用しているDBを表示する")
 async def db_current(interaction: discord.Interaction):
     await interaction.response.send_message(
         f"このサーバーは `{_db(interaction.guild.id if interaction.guild else None)}` を使用しています。",
@@ -577,11 +571,6 @@ async def db_current(interaction: discord.Interaction):
     )
 
 
-@db_group.command(name="create", description="新しいメモリDBを作成してこのDiscordサーバーに紐付ける")
-@app_commands.describe(
-    db_name="作成するDB名。英数字、'_'、'-' が使用可能",
-    password="後でDBを切り替える際に必要なパスワード",
-)
 async def db_create(interaction: discord.Interaction, db_name: str, password: str):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -602,11 +591,6 @@ async def db_create(interaction: discord.Interaction, db_name: str, password: st
     )
 
 
-@db_group.command(name="use", description="このDiscordサーバーを既存のメモリDBに切り替える")
-@app_commands.describe(
-    db_name="このサーバーで使用するDB名",
-    password="対象DBのパスワード",
-)
 async def db_use(interaction: discord.Interaction, db_name: str, password: str):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -658,7 +642,6 @@ class _RefreshConfirmView(discord.ui.View):
         self.stop()
 
 
-@memory_group.command(name="optimize", description="長期記憶をAIで再構成し、重複・分散した情報を整理する")
 async def memory_optimize(interaction: discord.Interaction):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -677,8 +660,6 @@ async def memory_optimize(interaction: discord.Interaction):
     )
 
 
-@memory_group.command(name="save", description="このサーバーのDBに長期記憶を保存する")
-@app_commands.describe(text="ボットに覚えさせたい内容")
 async def memory_save(interaction: discord.Interaction, text: str):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -700,7 +681,6 @@ async def memory_save(interaction: discord.Interaction, text: str):
     )
 
 
-@memory_group.command(name="list", description="このサーバーに保存された最近の長期記憶を表示する")
 async def memory_list(interaction: discord.Interaction):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -719,8 +699,6 @@ async def memory_list(interaction: discord.Interaction):
     await interaction.response.send_message(body, ephemeral=True)
 
 
-@memory_group.command(name="trim", description="IDを指定して長期記憶を1件削除する")
-@app_commands.describe(memory_id="削除する記憶のID（/memory list で確認できます）")
 async def memory_trim(interaction: discord.Interaction, memory_id: int):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -743,8 +721,6 @@ async def memory_trim(interaction: discord.Interaction, memory_id: int):
         )
 
 
-@memory_group.command(name="capture", description="このチャンネルの最近のメッセージから長期記憶を抽出して保存する")
-@app_commands.describe(limit="調査する最近のメッセージ数（10〜100）")
 async def memory_capture(interaction: discord.Interaction, limit: app_commands.Range[int, 10, 100] = 40):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -781,7 +757,6 @@ async def memory_capture(interaction: discord.Interaction, limit: app_commands.R
     )
 
 
-@memory_group.command(name="clear", description="現在のチャンネルのチャット履歴を消去する")
 async def memory_clear(interaction: discord.Interaction):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -854,7 +829,6 @@ class _RagClearConfirmView(discord.ui.View):
         self.stop()
 
 
-@rag_group.command(name="on", description="現在のDBのRAGを有効にする")
 async def rag_on(interaction: discord.Interaction):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -871,7 +845,6 @@ async def rag_on(interaction: discord.Interaction):
     )
 
 
-@rag_group.command(name="off", description="現在のDBのRAGを無効にする")
 async def rag_off(interaction: discord.Interaction):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -888,7 +861,6 @@ async def rag_off(interaction: discord.Interaction):
     )
 
 
-@rag_group.command(name="status", description="現在のDBのRAG状態（有効/無効・バックエンド・文書数）を表示する")
 async def rag_status(interaction: discord.Interaction):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -905,12 +877,6 @@ async def rag_status(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@rag_group.command(name="backend", description="現在のDBのベクターDBバックエンドを切り替える（chroma / json）")
-@app_commands.describe(backend="使用するバックエンド: chroma（高速・永続）または json（依存なし・小規模向け）")
-@app_commands.choices(backend=[
-    app_commands.Choice(name="chroma（ChromaDB・推奨）", value="chroma"),
-    app_commands.Choice(name="json（純粋Python・依存なし）", value="json"),
-])
 async def rag_backend(interaction: discord.Interaction, backend: str):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -933,11 +899,6 @@ async def rag_backend(interaction: discord.Interaction, backend: str):
     )
 
 
-@rag_group.command(name="file", description="ファイルをアップロードしてRAGに追加する（.txt/.md/.pdf/.json、最大10MB）")
-@app_commands.describe(
-    file="追加するドキュメントファイル",
-    source="ソース名（省略時はファイル名）",
-)
 async def rag_file(interaction: discord.Interaction, file: discord.Attachment, source: str = ""):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -971,11 +932,6 @@ async def rag_file(interaction: discord.Interaction, file: discord.Attachment, s
     )
 
 
-@rag_group.command(name="url", description="URLからコンテンツを取得してRAGに追加する（Google Docs/Sheets/Webページ）")
-@app_commands.describe(
-    url="取得するURL（Google Docs共有リンクなど）",
-    source="ソース名（省略時はURL）",
-)
 async def rag_url(interaction: discord.Interaction, url: str, source: str = ""):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -1003,7 +959,6 @@ async def rag_url(interaction: discord.Interaction, url: str, source: str = ""):
     )
 
 
-@rag_group.command(name="paste", description="テキストを直接貼り付けてRAGに追加する（最大4000文字）")
 async def rag_paste(interaction: discord.Interaction):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -1016,11 +971,6 @@ async def rag_paste(interaction: discord.Interaction):
     await interaction.response.send_modal(_IngestTextModal(db_name))
 
 
-@rag_group.command(name="scan_channel", description="チャンネル履歴を遡ってPDF・Google DocsリンクをRAGに収集する")
-@app_commands.describe(
-    channel="スキャン対象のテキストチャンネル（省略時は現在のチャンネル）",
-    limit="遡るメッセージ数の上限（0=無制限、デフォルト1000）",
-)
 async def rag_scan_channel(
     interaction: discord.Interaction,
     channel: discord.TextChannel | None = None,
@@ -1131,17 +1081,6 @@ async def rag_scan_channel(
     await progress.edit(content=result)
 
 
-@rag_group.command(name="sync_server", description="サーバーの全チャンネルをスキャンしてRAGに同期する")
-@app_commands.describe(
-    mode="収集モード: all=全メッセージ / pinned=ピン留めのみ / threads=スレッドのみ",
-    limit="チャンネルあたりの上限メッセージ数（0=無制限、デフォルト500）",
-    incremental="True=前回以降の差分のみ取得 / False=全件フルスキャン",
-)
-@app_commands.choices(mode=[
-    app_commands.Choice(name="all — 全メッセージ", value="all"),
-    app_commands.Choice(name="pinned — ピン留めのみ", value="pinned"),
-    app_commands.Choice(name="threads — スレッドのみ", value="threads"),
-])
 async def rag_sync_server(
     interaction: discord.Interaction,
     mode: str = "all",
@@ -1201,8 +1140,6 @@ async def rag_sync_server(
     await progress_msg.edit(content=body)
 
 
-@rag_group.command(name="auto_sync", description="毎朝 09:00 JST の Discord 自動同期を有効化/無効化する")
-@app_commands.describe(enabled="True=有効化、False=無効化")
 async def rag_auto_sync(interaction: discord.Interaction, enabled: bool):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -1220,7 +1157,6 @@ async def rag_auto_sync(interaction: discord.Interaction, enabled: bool):
     await interaction.response.send_message(msg, ephemeral=True)
 
 
-@rag_group.command(name="sources", description="現在のDBのRAGインデックスに登録されているソース一覧を表示する")
 async def rag_sources(interaction: discord.Interaction):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -1290,7 +1226,6 @@ class _RagTrimSelectView(discord.ui.View):
         self.stop()
 
 
-@rag_group.command(name="trim", description="プルダウンからソースを選んでRAGチャンクを削除する")
 async def rag_trim(interaction: discord.Interaction):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -1314,7 +1249,6 @@ async def rag_trim(interaction: discord.Interaction):
     )
 
 
-@rag_group.command(name="clear", description="現在のDBのRAGインデックスを全削除する")
 async def rag_clear(interaction: discord.Interaction):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -1338,8 +1272,6 @@ async def rag_clear(interaction: discord.Interaction):
     )
 
 
-@notion_group.command(name="on", description="Notion連携を有効にする（APIキーも同時に設定）")
-@app_commands.describe(api_key="Notion Integration Token（secret_xxx... または ntn_xxx...）")
 async def notion_on(interaction: discord.Interaction, api_key: str):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -1358,12 +1290,11 @@ async def notion_on(interaction: discord.Interaction, api_key: str):
     chat_controller.notion_enable(db_name, api_key)
     await interaction.response.send_message(
         f"DB `{db_name}` のNotion連携を有効にしました。\n"
-        "次に `/notion db add <データベースID>` でNotionのDBを登録してください。",
+        "次に `/notion db action:add database_id:対象ID` でNotionのDBを登録してください。",
         ephemeral=True,
     )
 
 
-@notion_group.command(name="off", description="Notion連携を無効にする")
 async def notion_off(interaction: discord.Interaction):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -1380,11 +1311,8 @@ async def notion_off(interaction: discord.Interaction):
     )
 
 
-notion_db_group = app_commands.Group(name="db", description="連携するNotionデータベースIDを管理する", parent=notion_group)
 
 
-@notion_db_group.command(name="add", description="連携するNotionデータベースIDを追加する")
-@app_commands.describe(database_id="NotionのデータベースID（UUID形式）")
 async def notion_db_add(interaction: discord.Interaction, database_id: str):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -1403,12 +1331,11 @@ async def notion_db_add(interaction: discord.Interaction, database_id: str):
         return
     await interaction.response.send_message(
         f"NotionデータベースID `{database_id}` を登録しました。\n"
-        "`/notion search <キーワード>` で検索できるか確認できます。",
+        "`/notion search query:キーワード` で検索できるか確認できます。",
         ephemeral=True,
     )
 
 
-@notion_db_group.command(name="remove", description="登録済みのNotionデータベースIDを削除する")
 async def notion_db_remove(interaction: discord.Interaction):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -1445,7 +1372,6 @@ async def notion_db_remove(interaction: discord.Interaction):
     )
 
 
-@notion_group.command(name="status", description="現在のDBのNotion連携設定とAPI疎通を確認する")
 async def notion_status(interaction: discord.Interaction):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -1475,8 +1401,6 @@ async def notion_status(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@notion_group.command(name="search", description="Notionを実際に検索してボットに何が見えているか確認する")
-@app_commands.describe(query="Notionで検索するキーワード")
 async def notion_search(interaction: discord.Interaction, query: str):
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -1487,13 +1411,13 @@ async def notion_search(interaction: discord.Interaction, query: str):
 
     if not info["enabled"]:
         await interaction.response.send_message(
-            "Notion連携が無効です。`/notion status` で設定を確認してください。",
+            "Notion連携が無効です。`/notion config` で設定を確認してください。",
             ephemeral=True,
         )
         return
     if not info["has_api_key"]:
         await interaction.response.send_message(
-            "Notion APIキーが設定されていません。`/notion status` で設定を確認してください。",
+            "Notion APIキーが設定されていません。`/notion config` で設定を確認してください。",
             ephemeral=True,
         )
         return
@@ -1522,14 +1446,7 @@ async def notion_search(interaction: discord.Interaction, query: str):
         f"**Notion検索結果** — 「{query}」（DB: `{db_name}`）\n" + "\n".join(lines),
         ephemeral=True,
     )
-
-
-bot.tree.add_command(db_group)
-bot.tree.add_command(memory_group)
-bot.tree.add_command(rag_group)
-bot.tree.add_command(notion_group)
-from interfaces.archive_commands import archive_group
-bot.tree.add_command(archive_group)
+install_command_catalog(bot.tree, globals())
 
 
 def run(token: str):
