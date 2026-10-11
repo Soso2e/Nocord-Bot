@@ -113,5 +113,7 @@ Zone別ローカル `*.allowlist.json` に永続化し、configのID指定と合
 同一checkoutの手動／タスク二重起動をOSロックで防ぐ。停止したinterface threadをmainが検出する。
 Token等を伏せたrotateログをローカル `data/runtime/nocord.log` に保存する。
 起動・ログ秘匿・プロセスロックの追加後、**54 tests成功**、compileall、pip check、diff check成功。
-Task Schedulerの登録と起動経路を実機で確認した。実Discordへの接続完了は、正しいBot Token設定後に確認する。
+Task Schedulerの登録と起動経路を実機で確認した。その後、ユーザーがBot Tokenを設定し直し、
+タスク `NocordBot` のRunning状態、Discordへのログイン、スラッシュコマンド同期の成功を確認した。
+起動ログにTokenが含まれないことも確認。ログオン／再起動そのものを起こす試験は行っていない。
 READMEに別プロジェクト `Server/Nocord`（Notion→Discord Webhook通知）との違いも記載した。
