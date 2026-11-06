@@ -466,6 +466,7 @@ async def _process_with_notion(
 
     # RAG search after sync so newly indexed PDFs are included
     rag_docs: list[dict] = []
+    diagnostics: list[str] = []
     rag_cfg = cfg.get("rag", {})
     if rag_cfg.get("enabled", False) or archive_guild_id is not None:
         await _emit_progress(progress, "RAGを検索中...")
@@ -478,7 +479,10 @@ async def _process_with_notion(
                 score_threshold=rag_cfg.get("score_threshold", 0.3),
                 archive_guild_id=archive_guild_id,
                 rag_enabled=rag_cfg.get("enabled", False),
+                diagnostics=diagnostics,
             )
+            for diagnostic in diagnostics:
+                await _emit_progress(progress, diagnostic)
         except Exception:
             pass
 
@@ -512,6 +516,8 @@ async def _process_with_notion(
 
     # LLM① — synthesize RAG + Notion into a compact information summary
     synthesis_msgs = _build_synthesis_messages(message, rag_docs, notion_results)
+    if diagnostics:
+        synthesis_msgs.append({"role": "system", "content": "検索状態:\n" + "\n".join(diagnostics)})
     synthesized = await _llm.chat(synthesis_msgs)
 
     # LLM② — generate the final user-facing reply
@@ -519,6 +525,8 @@ async def _process_with_notion(
     final_messages = build_messages_with_synthesized_info(
         db_name, session_id, message, synthesized, conversation_context=conversation_context
     )
+    if diagnostics:
+        final_messages.insert(1, {"role": "system", "content": "検索状態:\n" + "\n".join(diagnostics)})
     await _emit_progress(progress, "回答を生成中...")
     reply = await _llm.chat(final_messages)
     references = _format_notion_references(notion_results)
@@ -752,7 +760,11 @@ def rag_get_status(db_name: str) -> dict:
 def rag_ingest_text(db_name: str, text: str, source: str = "") -> int:
     """Ingest plain text into the RAG index. Returns number of chunks stored."""
     from core.rag_manager import ingest_text
-    return ingest_text(db_name, text, source=source)
+    count = ingest_text(db_name, text, source=source)
+    if count <= 0:
+        raise ValueError("保存できる本文がありません（画像PDFは文字認識が必要です）")
+    rag_enable(db_name)
+    return count
 
 
 def rag_clear_documents(db_name: str) -> int:

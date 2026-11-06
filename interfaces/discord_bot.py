@@ -367,7 +367,8 @@ async def _daily_discord_sync() -> None:
         scan_start = datetime.datetime.now(datetime.timezone.utc)
         try:
             result = await _sync_guild_to_rag(guild, db_name, mode="all", limit_per_channel=500, after=after)
-            update_guild_sync_state(guild.id, last_sync_at=scan_start.isoformat())
+            if not result.get("errors"):
+                update_guild_sync_state(guild.id, last_sync_at=scan_start.isoformat())
             print(
                 f"[AutoSync] {guild.name}: "
                 f"{result['channels_processed']} ch, {result['total_chunks']} chunks"
@@ -920,8 +921,10 @@ async def rag_status(interaction: discord.Interaction):
     embed = discord.Embed(title=f"RAG ステータス — `{db_name}`", color=0x57F287 if stats.get("enabled") else 0x99AAB5)
     embed.add_field(name="状態", value=enabled_label, inline=True)
     embed.add_field(name="バックエンド", value=f"`{stats.get('vector_backend', 'chroma')}`", inline=True)
-    embed.add_field(name="文書数", value=str(stats.get("document_count", 0)), inline=True)
+    embed.add_field(name="保存チャンク数", value=str(stats.get("document_count") if stats.get("document_count") is not None else "取得失敗"), inline=True)
     embed.add_field(name="埋め込みモデル", value=f"`{stats.get('embedding_model', '-')}`", inline=True)
+    if stats.get("error"):
+        embed.add_field(name="エラー", value=stats["error"], inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -1025,7 +1028,8 @@ async def rag_scan_channel(
     limit: int = 1000,
 ):
     import re as _re
-    import httpx as _httpx
+    from core.rag_manager import check_connection
+    from core.discord_pdf_sync import collect_pdf_attachments
 
     if not _require_guild(interaction):
         await interaction.response.send_message("このコマンドはDiscordサーバー内でのみ使用できます。", ephemeral=True)
@@ -1039,31 +1043,41 @@ async def rag_scan_channel(
 
     await interaction.response.defer(ephemeral=True, thinking=True)
 
-    existing_sources = set(chat_controller.rag_list_sources(db_name))
+    try:
+        await asyncio.to_thread(check_connection, db_name)
+        existing_sources = set(await asyncio.to_thread(chat_controller.rag_list_sources, db_name))
+    except Exception:
+        await interaction.followup.send(
+            f"DB `{db_name}` の取り込み準備に失敗しました。保存は行われていません。\n"
+            "埋め込みモデル名・モデルサーバーの接続・保存先を確認してください。"
+            " `/rag config action:status` でモデル名を確認できます。",
+            ephemeral=True,
+        )
+        return
 
     _GDOC_ID_RE = _re.compile(r"https://docs\.google\.com/(document|spreadsheets)/d/([^/?#\s<>\"']+)")
 
     # --- pass 1: collect unique PDFs and Google Docs links from history ---
-    pdf_queue: list[tuple[str, str]] = []   # (filename, attachment_url)
+    pdf_queue = []  # (attachment, stable source)
     gdoc_queue: list[tuple[str, str]] = []  # (canonical_url, type)
-    seen_filenames: set[str] = set()
+    seen_pdf_sources: set[str] = set()
     seen_gdoc_ids: set[str] = set()
     msg_count = 0
     history_limit: int | None = None if limit == 0 else limit
 
     progress = await interaction.followup.send(
-        f"チャンネル {target.mention} のスキャンを開始しています...",
+        f"DB `{db_name}` にチャンネル {target.mention} のPDF・Google Docs／Sheetsを取り込みます。\n"
+        "通常の投稿本文は対象外です。資料を確認中...",
         ephemeral=True,
         wait=True,
     )
 
     async for message in target.history(limit=history_limit, oldest_first=False):
         msg_count += 1
-        for att in message.attachments:
-            if att.filename.lower().endswith(".pdf"):
-                if att.filename not in seen_filenames and att.filename not in existing_sources:
-                    seen_filenames.add(att.filename)
-                    pdf_queue.append((att.filename, att.url))
+        for attachment, source in collect_pdf_attachments([message], existing_sources):
+            if source not in seen_pdf_sources:
+                seen_pdf_sources.add(source)
+                pdf_queue.append((attachment, source))
         for m in _GDOC_ID_RE.finditer(message.content):
             doc_type, doc_id = m.group(1), m.group(2)
             if doc_id in seen_gdoc_ids:
@@ -1078,7 +1092,7 @@ async def rag_scan_channel(
 
     total_new = len(pdf_queue) + len(gdoc_queue)
     await progress.edit(content=(
-        f"スキャン完了: {msg_count} 件のメッセージを確認\n"
+        f"資料の確認完了: {msg_count} 件のメッセージを確認\n"
         f"新規 PDF: {len(pdf_queue)} 件 / Google Docs: {len(gdoc_queue)} 件\n"
         f"インジェスト中..."
     ))
@@ -1086,16 +1100,15 @@ async def rag_scan_channel(
     # --- pass 2: download and ingest ---
     ingested: list[str] = []
     errors: list[str] = []
+    stored_chunks = 0
 
-    for filename, url in pdf_queue:
+    for attachment, source in pdf_queue:
+        filename = attachment.filename
         try:
-            def _dl(u: str) -> bytes:
-                r = _httpx.get(u, follow_redirects=True, timeout=60)
-                r.raise_for_status()
-                return r.content
-            data = await asyncio.to_thread(_dl, url)
+            data = await attachment.read()
             text = await asyncio.to_thread(read_bytes, data, filename)
-            count = await asyncio.to_thread(chat_controller.rag_ingest_text, db_name, text, filename)
+            count = await asyncio.to_thread(chat_controller.rag_ingest_text, db_name, text, source)
+            stored_chunks += count
             ingested.append(f"PDF `{filename}` ({count} チャンク)")
         except Exception as exc:
             errors.append(f"PDF `{filename}`: {exc}")
@@ -1104,13 +1117,22 @@ async def rag_scan_channel(
         try:
             text = await asyncio.to_thread(fetch_url, canonical)
             count = await asyncio.to_thread(chat_controller.rag_ingest_text, db_name, text, canonical)
+            stored_chunks += count
             kind = "Google Docs" if doc_type == "document" else "Google Sheets"
             ingested.append(f"{kind} `{canonical}` ({count} チャンク)")
         except Exception as exc:
             errors.append(f"Google Docs `{canonical}`: {exc}")
 
     # --- build result ---
-    lines: list[str] = [f"**チャンネル {target.name} スキャン完了**（{msg_count} メッセージ）\n"]
+    stats = await asyncio.to_thread(chat_controller.rag_get_status, db_name)
+    total_label = stats.get('document_count') if not stats.get('error') else '取得失敗'
+    outcome = "取り込み完了" if not errors else "取り込み終了（一部失敗）" if ingested else "取り込み失敗"
+    lines: list[str] = [
+        f"**チャンネル {target.name} {outcome}**（{msg_count} メッセージ）",
+        f"保存先DB: `{db_name}` / 今回保存: {stored_chunks} チャンク",
+        f"RAG検索: {'有効' if stats.get('enabled') else '無効'} / 保存総数: {total_label}",
+        "対象: PDF・Google Docs／Sheets（通常の投稿本文は対象外）\n",
+    ]
     if total_new == 0:
         lines.append("新規コンテンツはありませんでした（全て既にRAGに登録済みか、対象なし）。")
     elif ingested:
@@ -1168,7 +1190,8 @@ async def rag_sync_server(
 
     scan_start = datetime.datetime.now(datetime.timezone.utc)
     result = await _sync_guild_to_rag(guild, db_name, mode=mode, limit_per_channel=limit_val, after=after)
-    update_guild_sync_state(guild.id, last_sync_at=scan_start.isoformat())
+    if not result.get("errors"):
+        update_guild_sync_state(guild.id, last_sync_at=scan_start.isoformat())
 
     lines = [
         f"**サーバー同期完了 — `{guild.name}`**",
@@ -1177,6 +1200,8 @@ async def rag_sync_server(
         f"DB: `{db_name}`",
     ]
     if result["errors"]:
+        lines[0] = f"**サーバー同期終了（一部失敗） — `{guild.name}`**"
+        lines.append("同期日時は更新していません。次回同期で失敗分を再試行します。")
         lines.append(f"\nエラー ({len(result['errors'])} 件):")
         lines.extend(f"- {e}" for e in result["errors"][:5])
         if len(result["errors"]) > 5:

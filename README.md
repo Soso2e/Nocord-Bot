@@ -58,6 +58,14 @@ Bot再起動時のコマンド同期後に新しい構成が反映されます�
 
 例: サーバー全体の登録は `/archive action:register scope:server`、過去ログの同期は `/rag sync`。
 現在のDBは `/status target:db`、知識検索の有効化は `/rag config action:enable` です。
+
+資料の取り込みは `/rag sync target:channel` で行います。開始前に埋め込みAPIと保存先を確認し、
+PDF・Google Docs／Sheetsを保存します（通常の投稿本文は対象外）。保存に成功するとRAG検索も自動で有効になります。
+結果には保存先DB、今回の保存チャンク数、保存総数、検索の状態、取り込みエラーが表示されます。
+文字を抽出できない画像PDFは保存成功として扱いません。同名のPDFも添付IDで区別します。
+サーバー同期でエラーが発生した場合は同期日時を進めず、次回の同期で再試行します。
+検索が失敗した場合は検索エラーを回答に伝え、検索結果がないだけではDBへの未登録を断定しません。
+取り込みを行うと検索が有効になるため、資料追加後も検索を止めたい場合は `/rag config action:disable` を実行してください。
 管理操作の権限チェックと削除の確認画面は従来どおり適用されます。
 
 ### メンションなし応答
@@ -155,7 +163,7 @@ LM Studio の OpenAI 互換 API をバックエンドに、RAG（検索拡張生
 ```bash
 # 例:
 # - Chat model: qwen3.6:27b
-# - Embedding model: bge-m3
+# - Embedding model: text-embedding-bge-m3
 # LM Studio でロードし、OpenAI-compatible server を起動する
 ```
 
@@ -256,7 +264,7 @@ python scripts/ingest.py --db general --stats
 | キー | デフォルト | 説明 |
 |---|---|---|
 | `enabled` | `false` | RAG の有効/無効 |
-| `embedding_model` | `"bge-m3"` | LM Studio でロードした埋め込みモデル名 |
+| `embedding_model` | `"text-embedding-bge-m3"`（Ollama: `"bge-m3"`） | ロードした埋め込みモデル名。明示設定を優先 |
 | `chunk_size` | `500` | チャンク分割サイズ（文字数） |
 | `chunk_overlap` | `50` | チャンク間のオーバーラップ（文字数） |
 | `retrieval_k` | `4` | 1回の検索で取得するチャンク数 |
@@ -439,7 +447,7 @@ PAIRはリクエスト単位でノードを選び、複数PCのVRAMを合算し�
   },
   "rag": {
     "enabled": false,
-    "embedding_model": "bge-m3",
+    "embedding_model": "text-embedding-bge-m3",
     "chunk_size": 500,
     "chunk_overlap": 50,
     "retrieval_k": 4,

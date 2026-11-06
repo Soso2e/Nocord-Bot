@@ -13,7 +13,9 @@ _RAG_CONSTRAINT = (
     "詳細な説明や独自の見解は加えないでください。\n\n"
     "2. データベースに情報がない場合:\n"
     "   1〜2文の簡単な概要（「〜は〇〇を担当する部署です」程度）を述べたうえで、"
-    "「詳細情報はデータベースに登録されていません」と伝えてください。\n\n"
+    "「今回の検索では詳細情報を見つけられませんでした」と伝えてください。"
+    "検索結果がないことだけを理由に、DBに未登録と断定しないでください。\n\n"
+    "検索エラーがある場合は、情報の有無を判定できないことと検索に失敗したことを伝えてください。\n\n"
     "3. 挨拶・雑談など情報検索を必要としない場合:\n"
     "   自然に会話として返してください。"
 )
@@ -61,8 +63,12 @@ def build_messages(db_name: str, session_id: str, user_input: str, *, archive_gu
             from core.knowledge_search import search_knowledge
             k = rag_cfg.get("retrieval_k", 4)
             threshold = rag_cfg.get("score_threshold", 0.3)
+            diagnostics = []
             rag_docs = search_knowledge(db_name, user_input, k=k, score_threshold=threshold,
-                                       archive_guild_id=archive_guild_id, rag_enabled=rag_enabled)
+                                       archive_guild_id=archive_guild_id, rag_enabled=rag_enabled,
+                                       diagnostics=diagnostics)
+            if diagnostics:
+                messages.append({"role": "system", "content": "検索状態:\n" + "\n".join(diagnostics)})
             if rag_docs:
                 doc_sections = "\n---\n".join(
                     f"[出典: {d['source']}]\n{d['content']}" for d in rag_docs
@@ -72,7 +78,8 @@ def build_messages(db_name: str, session_id: str, user_input: str, *, archive_gu
                     "content": "参照知識ベース:\n" + doc_sections,
                 })
         except Exception:
-            pass  # RAG unavailable — degrade gracefully to memory-only mode
+            messages.append({"role": "system", "content":
+                             "検索状態: 知識ベースの検索に失敗しました。DBへの登録の有無は判定できません。"})
 
     # Conversation memories (lower priority than knowledge docs)
     if memories:

@@ -194,6 +194,24 @@ def _llm_headers(llm_cfg: dict) -> dict:
     return {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
 
+def _embedding_model(rag_cfg: dict, llm_cfg: dict) -> str:
+    return rag_cfg.get("embedding_model") or (
+        "bge-m3" if llm_cfg.get("provider") == "ollama" else "text-embedding-bge-m3"
+    )
+
+
+def check_connection(db_name: str) -> None:
+    """Check embedding availability and storage before reading channel history."""
+    rag_cfg = _load_rag_config(db_name)
+    llm_cfg = _load_llm_config()
+    _embed(["RAG 接続確認"], _embedding_model(rag_cfg, llm_cfg),
+           llm_cfg.get("base_url", "http://localhost:11434"))
+    if _get_backend(db_name) == "json":
+        _json_load(db_name)
+    else:
+        _chroma_count(db_name)
+
+
 def _embed(texts: list[str], model: str, base_url: str) -> list[list[float]]:
     """Get embeddings from the configured provider."""
     llm_cfg = _load_llm_config()
@@ -256,7 +274,7 @@ def ingest_text(
     rag_cfg = _load_rag_config(db_name)
     llm_cfg = _load_llm_config()
 
-    embedding_model = rag_cfg.get("embedding_model", "bge-m3")
+    embedding_model = _embedding_model(rag_cfg, llm_cfg)
     chunk_size = rag_cfg.get("chunk_size", 500)
     chunk_overlap = rag_cfg.get("chunk_overlap", 50)
     base_url = llm_cfg.get("base_url", "http://localhost:11434")
@@ -267,6 +285,8 @@ def ingest_text(
         return 0
 
     embeddings = _embed(chunks, embedding_model, base_url)
+    if len(embeddings) != len(chunks) or any(not embedding for embedding in embeddings):
+        raise ValueError("埋め込みの件数が本文と一致しないか、空のベクトルが返されました")
 
     ids = []
     metadatas = []
@@ -296,7 +316,7 @@ def search(
     rag_cfg = _load_rag_config(db_name)
     llm_cfg = _load_llm_config()
 
-    embedding_model = rag_cfg.get("embedding_model", "bge-m3")
+    embedding_model = _embedding_model(rag_cfg, llm_cfg)
     base_url = llm_cfg.get("base_url", "http://localhost:11434")
     backend = _get_backend(db_name)
 
@@ -349,8 +369,9 @@ def collection_stats(db_name: str) -> dict:
         return {
             "document_count": count,
             "enabled": rag_cfg.get("enabled", False),
-            "embedding_model": rag_cfg.get("embedding_model", "bge-m3"),
+            "embedding_model": _embedding_model(rag_cfg, _load_llm_config()),
             "vector_backend": backend,
         }
     except Exception:
-        return {"document_count": 0, "enabled": False, "embedding_model": "", "vector_backend": "chroma"}
+        return {"document_count": None, "enabled": False, "embedding_model": "", "vector_backend": "chroma",
+                "error": "RAG保存先の状態を取得できませんでした"}

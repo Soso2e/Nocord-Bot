@@ -1,5 +1,6 @@
 """Compose existing document RAG with consented Discord evidence for Discord Q&A."""
 from datetime import datetime
+import logging
 from core.gateway_config import load_policy
 
 
@@ -25,15 +26,17 @@ def conversation_blocks(messages):
 
 
 def search_knowledge(db_name, query, k=4, score_threshold=0.3, *, archive_guild_id=None,
-                     rag_enabled=True):
+                     rag_enabled=True, diagnostics=None):
     policy = load_policy()
     docs = []
     if rag_enabled:
         try:
             from core.rag_manager import search
             docs = search(db_name, query, k=k, score_threshold=score_threshold)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).warning("RAG search failed for DB %s (%s)", db_name, type(exc).__name__)
+            if diagnostics is not None:
+                diagnostics.append("知識ベースの検索に失敗しました。モデル接続・埋め込み設定の確認が必要です。")
     if policy.enabled:
         # Old direct-history sources are stale after edits/deletes and cannot bypass consent.
         docs = [d for d in docs if not d.get('source', '').startswith('discord:')]
@@ -60,6 +63,8 @@ def search_knowledge(db_name, query, k=4, score_threshold=0.3, *, archive_guild_
                     if block:
                         seen.update(block['message_ids'])
                         docs.append(dict(content=block['content'], source=hit['discord_url'], score=hit['score']))
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.getLogger(__name__).warning("Archive search failed for DB %s (%s)", db_name, type(exc).__name__)
+                if diagnostics is not None:
+                    diagnostics.append("Discord履歴の検索に失敗しました。")
     return docs
